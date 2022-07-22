@@ -1,55 +1,48 @@
 import sys
 import os
-import uproot4 as uproot
+import uproot as uproot
 import numpy as np
-import awkward1 as ak
+import awkward as ak
 
 import gc
 
 import torch
 import torch.nn as nn
 
-from sklearn import metrics
-from sklearn.utils.class_weight import compute_class_weight
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-
-import time
-
-from focal_loss import FocalLoss, focal_loss
+from focal_loss import FocalLoss
 
 print("Torch version =",torch.__version__)
 
-minima = np.load('/nfs/dust/cms/user/anstein/additional_files/default_value_studies_minima.npy')
+minima = np.load('/nfs/dust/cms/user/summer/additional_files/minima.npy')
 default = 0.001
-#defaults_per_variable = minima - 0.001
+
 defaults_per_variable = minima - default
 
-
-def cleandataset(f, defaults_per_variable, isMC):
+def cleandataset(f, isMC):
     print('Doing cleaning, isMC = ',isMC)
+    
     feature_names = [k for k in f['Events'].keys() if  (('Jet_eta' == k) or ('Jet_pt' == k) or ('Jet_DeepCSV' in k))]
+
     # tagger output to compare with later and variables used to get the truth output
     feature_names.extend(('Jet_btagDeepB_b','Jet_btagDeepB_bb', 'Jet_btagDeepC','Jet_btagDeepL'))
     if isMC == True:
         feature_names.extend(('Jet_nBHadrons', 'Jet_hadronFlavour'))
     #print(feature_names)
-    #print(len(feature_names))
+    #print(len(feature_names)) => 71
     
-    # go through a specified number of events, and get the information (awkward-arrays) for the keys specified above
+    # go through a specified number of events, and get the information (awkward-arrays) for the keys specified above, place in data
     for data in f['Events'].iterate(feature_names, step_size=f['Events'].num_entries, library='ak'):
         break
-        
     
     # creating an array to store all the columns with their entries per jet, flatten per-event -> per-jet
     datacolumns = np.zeros((len(feature_names)+1, len(ak.flatten(data['Jet_pt'], axis=1))))
-    #print(len(datacolumns))
-
+    #print(f"length of datacolumns:{len(datacolumns)}")
+    
     for featureindex in range(len(feature_names)):
         a = ak.flatten(data[feature_names[featureindex]], axis=1) # flatten along first inside to get jets
-        
         datacolumns[featureindex] = ak.to_numpy(a)
-
+    #print(f"shape of datacolumns:{np.shape(datacolumns)}")
+    
     if isMC == True:
         nbhad = ak.to_numpy(ak.flatten(data['Jet_nBHadrons'], axis=1))
         hadflav = ak.to_numpy(ak.flatten(data['Jet_hadronFlavour'], axis=1))
@@ -61,46 +54,24 @@ def cleandataset(f, defaults_per_variable, isMC):
 
         #print(np.unique(target_class))
 
-        #datacolumns[len(feature_names)] = ak.to_numpy(target_class)
         datacolumns[len(feature_names)] = target_class
         #print(np.unique(datacolumns[len(feature_names)]))
         
     datavectors = datacolumns.transpose()
-    #print(np.unique(datavectors[:,len(feature_names)]))
-    
-    #print(i)
+    #print(np.unique(datavectors[:,len(feature_names)])) # if it is MC will contain jet-flavour otherwise 0
+    #print(np.shape(datavectors))
+
     for j in range(67):
         datavectors[:, j][datavectors[:, j] == np.nan]  = defaults_per_variable[j]
         datavectors[:, j][datavectors[:, j] <= -np.inf] = defaults_per_variable[j]
         datavectors[:, j][datavectors[:, j] >= np.inf]  = defaults_per_variable[j]
-        datavectors[:, j][datavectors[:, j] == -999]  = defaults_per_variable[j] 
-        # this one line is new and the reason for that is that there can be "original" -999 defaults in the inputs that should now also move into the new
-        # default bin, it was not necessary in my old clean_1_2.py code, because I could just leave them where they are, here they need to to be modified
-        #print(np.unique(datavectors[:,-1]))
-    #print(np.unique(datavectors[:,-1]))
-    datavecak = ak.from_numpy(datavectors)
-    #print(ak.unique(datavecak[:,-1]))
-    #print(len(datavecak),"entries before cleaning step 1")
-    
-    #datavecak = datavecak[datavecak[:, 67] >= 0.]
-    #datavecak = datavecak[datavecak[:, 67] <= 1.]
-    #datavecak = datavecak[datavecak[:, 68] >= 0.]
-    #datavecak = datavecak[datavecak[:, 68] <= 1.]
-    #datavecak = datavecak[datavecak[:, 69] >= 0.]
-    #datavecak = datavecak[datavecak[:, 69] <= 1.]
-    #datavecak = datavecak[datavecak[:, 70] >= 0.]
-    #datavecak = datavecak[datavecak[:, 70] <= 1.]
+        datavectors[:, j][datavectors[:, j] == -999]    = defaults_per_variable[j] 
 
-    
+    alldata = datavectors
 
-    # check jetNSelectedTracks, jetNSecondaryVertices > 0
-    #datavecak = datavecak[(datavecak[:, 63] > 0) | (datavecak[:, 64] > 0)]  # keep those where at least any of the two variables is > 0, they don't need to be > 0 simultaneously
-    #print(len(datavecak),"entries after cleaning step 1")
-
-    alldata = ak.to_numpy(datavecak)
-    #print(np.unique(alldata[:,-1]))
-        
-    
+    # featre[64] => jetNSelectedTRacks    
+    # alldata[:,64] <= 0 means that in this jet there is less than 1 track!
+    # so if there is at least one jet, leave it alone, otherwise give it default
     for track0_vars in [6,12,22,29,35,42,50]:
         alldata[:,track0_vars][alldata[:,64] <= 0] = defaults_per_variable[track0_vars]
     for track0_1_vars in [7,13,23,30,36,43,51]:
@@ -113,34 +84,38 @@ def cleandataset(f, defaults_per_variable, isMC):
         alldata[:,track0123_4_vars][alldata[:,64] <= 4] = defaults_per_variable[track0123_4_vars]
     for track01234_5_vars in [11,17,27,34,40,47,55]:
         alldata[:,track01234_5_vars][alldata[:,64] <= 5] = defaults_per_variable[track01234_5_vars]
+
+    # feature[65] => Jet_DeepCSV_jetNTracksEtaRel :: the number of tracks for which eta_rel (between track and jet axis) is available
     alldata[:,18][alldata[:,65] <= 0] = defaults_per_variable[18]
     alldata[:,19][alldata[:,65] <= 1] = defaults_per_variable[19]
     alldata[:,20][alldata[:,65] <= 2] = defaults_per_variable[20]
     alldata[:,21][alldata[:,65] <= 3] = defaults_per_variable[21]
 
+    # features[41,48,49,56] => features which are given for the first track above the charm mass
     for AboveCharm_vars in [41,48,49,56]:
         alldata[:,AboveCharm_vars][alldata[:,AboveCharm_vars]==-1] = defaults_per_variable[AboveCharm_vars] 
     
-    
     datacls = [i for i in range(0,67)]
+
     if isMC == True:
         datacls.append(73)
+
     dataset = alldata[:, datacls]
-    #print(np.unique(dataset[:,-1]))
-    
-    #DeepCSV_dataset = alldata[:, 67:71]
+    #print(f"Shape of dataset:{np.shape(dataset)}") # no_jets x no_features
     
     return dataset
 
 def preprocess(rootfile, isMC):
     print('Doing starting clean/prep, isMC: ',isMC)
-    minima = np.load('/nfs/dust/cms/user/anstein/additional_files/default_value_studies_minima.npy')
-    defaults_per_variable = minima - 0.001
-    dataset_input_target = cleandataset(uproot.open(rootfile), defaults_per_variable, isMC)
-    print(len(dataset_input_target))
+    
+    dataset_input_target = cleandataset(uproot.open(rootfile), isMC)
+    #print(len(dataset_input_target))
     #print(np.unique(dataset_input_target[:,-1]))
-    #sys.exit()
+    #print(f"Shape of dataset returned from cleaning:{np.shape(dataset_input_target)}")
+    
     inputs = torch.Tensor(dataset_input_target[:,0:67])
+    #print(f"Shape of input tensors:{inputs.size()}")
+    
     # targets only make sense for MC, but nothing 'breaks' when calling it on Data (the last column is different though)
     targets = torch.Tensor(dataset_input_target[:,-1]).long()
     #print(torch.unique(targets))        
@@ -149,7 +124,7 @@ def preprocess(rootfile, isMC):
     for i in range(0,67): # use already calculated scalers (same for all files),
         # for the calculation, only train samples and only non-defaults were used
         #scaler = StandardScaler().fit(inputs[:,i][inputs[:,i]!=defaults_per_variable[i]].reshape(-1,1))
-        scaler = torch.load(f'/nfs/dust/cms/user/anstein/additional_files/scalers/scaler_{i}_with_default_{default}.pt')
+        scaler = torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt')
         inputs[:,i]   = torch.Tensor(scaler.transform(inputs[:,i].reshape(-1,1)).reshape(1,-1))
         scalers.append(scaler)
 
@@ -226,10 +201,8 @@ def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scalers=None
                     xadv[:,i][defaults] = sample[:,i][defaults]
         return xadv.detach()
 
-def predict(inputs, targets, scalers, method):
-    #inputs, targets, scalers = preprocess(rootfile)
-    #print(targets[:100])
-    #sys.exit()
+def predict(inputs, method):
+    
     with torch.no_grad():
         device = torch.device("cpu")
         global model
@@ -263,7 +236,9 @@ def predict(inputs, targets, scalers, method):
             #class_weights = torch.FloatTensor(np.array([ 0.37333512, 24.65012434,  2.25474568,  1.1942229 ])).to(device)
             #criterion = nn.CrossEntropyLoss(weight=class_weights)
             criterion = nn.CrossEntropyLoss()
-            modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_all_TT_350_epochs_v10_GPU_weighted_new_49_datasets_with_default_0.001.pt'
+
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/model_all_TT_350_epochs_v10_GPU_weighted_new_49_datasets_with_default_0.001.pt'
+            #modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/normal_tr_278_-1/model_200_epochs_normal_tr_278_-1.pt'
 
 
         # ==========================================================================
@@ -404,8 +379,9 @@ def predict(inputs, targets, scalers, method):
         # old
         else:
             criterion = nn.CrossEntropyLoss()
-            modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_all_TT_350_epochs_v10_GPU_weighted_as_is_49_datasets_with_default_0.001.pt'
-
+            #modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_all_TT_350_epochs_v10_GPU_weighted_as_is_49_datasets_with_default_0.001.pt'
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/normal_tr_278_-1/model_200_epochs_normal_tr_278_-1.pt'
+        
         checkpoint = torch.load(modelPath, map_location=torch.device(device))
         model.load_state_dict(checkpoint["model_state_dict"])
 
@@ -413,57 +389,52 @@ def predict(inputs, targets, scalers, method):
 
         #evaluate network on inputs
         model.eval()
+        
         return model(inputs).detach().numpy()
-
 
 def calcBvsL(matching_predictions):
     global n_jets
-    #matching_predictions = np.where(np.tile((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,3] != 0), (4,1)).transpose(), matching_predictions, (-1.0)*np.ones((n_jets,4)))
     
     custom_BvL = np.where(((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,3]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,0]+matching_predictions[:,1])/(matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,3]), (-1.0)*np.ones(n_jets))
     
     custom_BvL[(custom_BvL < 0.000001) & (custom_BvL > -0.000001)] = 0.000001
-    custom_BvL[(np.isnan(custom_BvL)) & (np.isinf(custom_BvL))] = -1.0
+    custom_BvL[(np.isnan(custom_BvL)) | (np.isinf(custom_BvL))] = -1.0
     custom_BvL[custom_BvL > 0.99999] = 0.99999
     
     return custom_BvL
 
 def calcBvsC(matching_predictions):
     global n_jets
-    #matching_predictions = np.where(np.tile((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2] != 0) , (4,1)).transpose(), matching_predictions, (-1.0)*np.ones((n_jets,4)))
     
     custom_BvC = np.where(((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,0]+matching_predictions[:,1])/(matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]), (-1.0)*np.ones(n_jets))
     
     custom_BvC[(custom_BvC < 0.000001) & (custom_BvC > -0.000001)] = 0.000001
-    custom_BvC[(np.isnan(custom_BvC)) & (np.isinf(custom_BvC))] = -1.0
+    custom_BvC[(np.isnan(custom_BvC)) | (np.isinf(custom_BvC))] = -1.0
     custom_BvC[custom_BvC > 0.99999] = 0.99999
     
     return custom_BvC
     
 def calcCvsB(matching_predictions):
     global n_jets
-    #matching_predictions = np.where(np.tile((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2] != 0), (4,1)).transpose(), matching_predictions, (-1.0)*np.ones((n_jets,4)))
     
     custom_CvB = np.where(((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,2])/(matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]), (-1.0)*np.ones(n_jets))
     
-    custom_CvB[(custom_CvB < 0.000001) & (custom_CvB > -0.000001)] = 0.000001
-    custom_CvB[(np.isnan(custom_CvB)) & (np.isinf(custom_CvB))] = -1.0
-    custom_CvB[custom_CvB > 0.99999] = 0.99999
+    custom_CvB[(custom_CvB < 0.000001) & (custom_CvB > -0.000001)]  = 0.000001
+    custom_CvB[(np.isnan(custom_CvB)) | (np.isinf(custom_CvB))]     = -1.0
+    custom_CvB[custom_CvB > 0.99999]                                = 0.99999
     
     return custom_CvB
     
 def calcCvsL(matching_predictions):
     global n_jets
-    #matching_predictions = np.where(np.tile((matching_predictions[:,2]+matching_predictions[:,3] != 0), (4,1)).transpose(), matching_predictions, (-1.0)*np.ones((n_jets,4)))
     
     custom_CvL = np.where(((matching_predictions[:,2]+matching_predictions[:,3]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,2])/(matching_predictions[:,2]+matching_predictions[:,3]), (-1.0)*np.ones(n_jets))
     
     custom_CvL[(custom_CvL < 0.000001) & (custom_CvL > -0.000001)] = 0.000001
-    custom_CvL[(np.isnan(custom_CvL)) & (np.isinf(custom_CvL))] = -1.0
+    custom_CvL[(np.isnan(custom_CvL)) | (np.isinf(custom_CvL))] = -1.0
     custom_CvL[custom_CvL > 0.99999] = 0.99999
     
     return custom_CvL
-
     
 def calcBvsL_legacy(predictions):  # P(b)+P(bb)/(P(b)+P(bb)+P(udsg))
     bvsl = (predictions[:,0]+predictions[:,1])/(1-predictions[:,2])
@@ -474,15 +445,13 @@ def calcBvsC_legacy(predictions):  # P(b)+P(bb)/(P(b)+P(bb)+P(c))
     bvsc = (predictions[:,0]+predictions[:,1])/(1-predictions[:,3])
     bvsc[bvsc < 0.000001] = 0.000001
     bvsc[bvsc > 0.99999] = 0.99999
-    return bvsc
-    
+    return bvsc   
 def calcCvsB_legacy(predictions):  # P(c)/(P(b)+P(bb)+P(c))
     cvsb =  (predictions[:,2])/(predictions[:,0]+predictions[:,1]+predictions[:,2])
     cvsb[cvsb < 0.000001] = 0.000001
     cvsb[cvsb > 0.99999] = 0.99999
     cvsb[np.isnan(cvsb)] = -1
     return cvsb
-    
 def calcCvsL_legacy(predictions):  # P(c)/(P(udsg)+P(c))
     cvsl = (predictions[:,2])/(predictions[:,3]+predictions[:,2])
     cvsl[cvsl < 0.000001] = 0.000001
@@ -490,95 +459,38 @@ def calcCvsL_legacy(predictions):  # P(c)/(P(udsg)+P(c))
     cvsl[np.isnan(cvsl)] = -1
     return cvsl
 
-
 if __name__ == "__main__":
     fullName, weightingMethod, condoroutdir = sys.argv[1], sys.argv[2], sys.argv[3]
     
-    '''
-    JECNameList = ["nom","jesTotalUp","jesTotalDown","jerUp","jerDown"]
-    fileName = str(sys.argv[1])
-    fullName = fileName
-    isLocal = False
-    if len(sys.argv) > 3:
-        JECidx = int(sys.argv[4])
-    else:
-        JECidx = 0
-    JECName = JECNameList[JECidx]
-
-    maxEvents=-1
-
-    print("#########"*10)
-    print("start_time : ",time.ctime())
-    print("processing on : ",fullName)
-    
-    debug = False
-    isNano = False
-    pref = ""
-    '''
     parentDir = ""
     era = 2016
-
-    #pnfspref = "/pnfs/desy.de/cms/tier2/"
-
-    #if os.path.isfile(fullName):
-    #    pref = ""
-    #elif os.path.isfile(pnfspref+fullName):
-    #    pref = pnfspref    
-    #elif fullName.startswith("root:"):
-    #    pref = ""
-    #    #print("Input file name is in AAA format.")
-    #else:
-    #    pref = "root://xrootd-cms.infn.it//"
-    #    #print("Forcing AAA.")
-    #    if not fullName.startswith("/store/"):
-    #        fileName = "/" + '/'.join(fullName.split('/')[fullName.split('/').index("store"):])
-    #print("Will open file %s."%(pref+fileName))
     
-    print("Will open file %s."%(fullName))
+    print("Will open file %s"%(fullName))
 
-    #parentDirList = ["VHcc_2017V5_Dec18/","NanoCrabProdXmas/","/2016/","2016_v2/","/2017/","2017_v2","/2018/","VHcc_2016V4bis_Nov18/"]
     parentDirList = ["/106X_v2_17/","/106X_v2_17rsb2/","/106X_v2_17rsb3/"]
+
     for iParent in parentDirList:
-        if iParent in fullName: parentDir = iParent
+        if iParent in fullName: 
+            parentDir = iParent
+    
     if parentDir == "": fullName.split('/')[8]+"/"
 
-    if "2017" in fullName: era = 2017
-    if "2018" and not "2017" in fullName: era = 2018   # this is needed because both 2017 and 2018 appear in the new file names
-    '''
-    #if "spmondal" in fullName and fullName.startswith('/pnfs/'):
-    ##    parentDir = 'VHbbPostNano2016_V5_CtagSF/'
-        #parentDir = fullName.split('/')[8]+"/"
-        #if "2017" in fullName: era = 2017
-        #if "/2017/" in fullName: parentDir = "2017/"
+    # this is needed because both 2017 and 2018 appear in the new file names
+    if "2017" in fullName: 
+        era = 2017
+    if "2018" and not "2017" in fullName: 
+        era = 2018   
+    
+    sampName=   fullName.split(parentDir)[1].split('/')[0]
+    channel =   sampName
+    sampNo  =   fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+    dirNo   =   fullName.split(parentDir)[1].split('/')[3][-1]
+    flNo    =   fullName.split(parentDir)[1].split('/')[-1].rstrip('.root').split('_')[-1]
+    outNo   =   "%s_%s_%s"%(sampNo,dirNo,flNo)
+    
+    if "_" in channel: 
+        channel=channel.split("_")[0]
 
-    #if "VHcc_2017V5_Dec18" in fullName and fullName.startswith('/pnfs/'):
-        #parentDir = 'VHcc_2017V5_Dec18/'
-        #era = 2017
-    #if fullName.startswith('/store/'):
-        #if "lmastrol" in fullName:
-            #pref = "/pnfs/desy.de/cms/tier2"
-        #else:
-            #pref = "root://xrootd-cms.infn.it//"
-            #parentDir="NanoCrabProdXmas/"
-            #isNano = True
-    #elif fullName.startswith('root:'):
-        #pref = ""
-    #else:
-        #pref = "file:"
-
-    #iFile = TFile.Open(pref+fileName)
-
-    #inputTree = iFile.Get("Events")
-    #inputTree.SetBranchStatus("*",1)
-    '''
-    sampName=fullName.split(parentDir)[1].split('/')[0]
-    channel=sampName
-    sampNo=fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
-    dirNo=fullName.split(parentDir)[1].split('/')[3][-1]
-    flNo=fullName.split(parentDir)[1].split('/')[-1].rstrip('.root').split('_')[-1]
-    outNo= "%s_%s_%s"%(sampNo,dirNo,flNo)
-
-    if "_" in channel: channel=channel.split("_")[0]
     # channel="Generic"
     if not 'Single' in channel and not 'Double' in channel and not 'EGamma' in channel:
         isMC = True
@@ -588,15 +500,10 @@ if __name__ == "__main__":
     
     global n_jets
     
-    #inputs, targets, scalers = preprocess(fullName, isMC)
-    inputs, targets, scalers = preprocess('infile.root', isMC)
+    #inputs, targets, scalers = preprocess(fullName, isMC)           # use this if running script interactively 
+    inputs, targets, scalers = preprocess('infile.root', isMC)      # use this if running script from condor_runscript_xxx.sh
     
     n_jets = len(targets)
-    
-    #if weightingMethod == "_both":
-    #    methods = ["_as_is","_new"]
-    #else:
-    #    methods = [weightingMethod]
     
     # to check multiple epochs of a given weighting method at once (using always 3 epochs should make sense, as previous tests were done on raw/noise/FGSM = 3 different sets)
     if weightingMethod.startswith('_multi_'):
@@ -607,6 +514,7 @@ if __name__ == "__main__":
         else:
             # adversarial training
             wmethods = ['adv_tr_eps0.01_'+e for e in (weightingMethod.split('_adv_tr_eps0.01_')[-1]).split(',')]
+
         print('Will run with these weighting methods & epochs:', wmethods)
         
         for i,wm in enumerate(wmethods):
@@ -616,7 +524,7 @@ if __name__ == "__main__":
             outputBvsCdir  = f"{letters[i]}_outBvsC_%s.npy"%(outNo)
             outputBvsLdir  = f"{letters[i]}_outBvsL_%s.npy"%(outNo)
             
-            predictions = predict(inputs, targets, scalers, wm)
+            predictions = predict(inputs, wm)
             
             bvl = calcBvsL(predictions)
             print('Raw bvl, bvc, cvb, cvl')
@@ -665,11 +573,7 @@ if __name__ == "__main__":
     else:
 
         wm = weightingMethod
-        #for wm in methods:  # was formerly using a loop over all weighting methods, but this would require using also multiple w.m. in the Analyzer
-        #outputPredsdir = "%s/%s/outPreds_%s%s.npy"%(condoroutdir,sampName,outNo,wm)
-        #outputBvsLdir = "%s/%s/outBvsL_%s%s.npy"%(condoroutdir,sampName,outNo,wm)
-
-        # new version doesn't store the w.m. in the filename
+        
         outputPredsdir = "outPreds_%s.npy"%(outNo)
         outputCvsBdir = "outCvsB_%s.npy"%(outNo)
         outputCvsLdir = "outCvsL_%s.npy"%(outNo)
@@ -688,55 +592,19 @@ if __name__ == "__main__":
         fgsm_outputBvsCdir = "fgsm_outBvsC_%s.npy"%(outNo)
         fgsm_outputBvsLdir = "fgsm_outBvsL_%s.npy"%(outNo)
 
-        #print("Saving into %s/%s"%(condoroutdir,sampName))
-
-
-
-        predictions = predict(inputs, targets, scalers, wm)
-        #print(predictions[:100,:])
-        #hist, bin_edges = np.histogram(predictions[:,0],bins=20)
-        #print('Flavour b predictions: bin_edges and histogram')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
-        #hist, bin_edges = np.histogram(predictions[:,1],bins=20)
-        #print('Flavour bb predictions: bin_edges and histogram')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
-        #hist, bin_edges = np.histogram(predictions[:,2],bins=20)
-        #print('Flavour c predictions: bin_edges and histogram')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
-        #hist, bin_edges = np.histogram(predictions[:,3],bins=20)
-        #print('Flavour udsg predictions: bin_edges and histogram')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
+        print("Saving into %s/%s"%(condoroutdir,sampName))
+        
+        predictions = predict(inputs, wm)
+        #print(f"shape of predictions:{np.shape(predictions)}")
+        
         bvl = calcBvsL(predictions)
-        #hist, bin_edges = np.histogram(bvl)
-        #print('bvl: bin_edges and histogram')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
-        #print(bvl[:100])
+        
         print('Raw bvl, bvc, cvb, cvl')
         print(min(bvl), max(bvl))
         np.save(outputBvsLdir, bvl)
         del bvl
         gc.collect()
-
+        
         bvc = calcBvsC(predictions)
         print(min(bvc), max(bvc))
         np.save(outputBvsCdir, bvc)
@@ -744,108 +612,43 @@ if __name__ == "__main__":
         gc.collect()
 
         cvb = calcCvsB(predictions)
-        #hist, bin_edges = np.histogram(cvb)
-        #print('cvb: bin_edges and histogram before assigning -1')
-        #print(bin_edges)
-        #print(hist)
-        #
-        #
-        #
-        # NOTE:
-        #
-        # The -1 bins are now already assigned inside the functions for BvsL, CvsB and CvsL !!
-        #
-        # handle division by 0 and assign -1 (if either CvsB or CvsL would be undefined)
-        #cvb[(predictions[:,0]+predictions[:,1]+predictions[:,2]) == 0] = -1
-        #cvb[(predictions[:,3]+predictions[:,2]) == 0] = -1
-        #hist, bin_edges = np.histogram(cvb,bins=20)
-        #print('cvb: bin_edges and histogram after assigning -1')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
-        #print(bvl[:100])
         print(min(cvb), max(cvb))
         np.save(outputCvsBdir, cvb)
         del cvb
         gc.collect()
+
         cvl = calcCvsL(predictions)
-        #hist, bin_edges = np.histogram(cvl)
-        #print('cvl: bin_edges and histogram before assigning -1')
-        #print(bin_edges)
-        #print(hist)
-        #cvl[(predictions[:,0]+predictions[:,1]+predictions[:,2]) == 0] = -1
-        #cvl[(predictions[:,3]+predictions[:,2]) == 0] = -1
-        #hist, bin_edges = np.histogram(cvl,bins=20)
-        #print('cvl: bin_edges and histogram after assigning -1')
-        #print(bin_edges)
-        #print(hist)
-        #del hist
-        #del bin_edges
-        #gc.collect()
-        #print(bvl[:100])
         print(min(cvl), max(cvl))
         np.save(outputCvsLdir, cvl)
         del cvl
         gc.collect()
 
-
+        #print("predictions before cutting over/underflow")
         #print(min(predictions[:,0]), max(predictions[:,0]))
         #print(min(predictions[:,1]), max(predictions[:,1]))
         #print(min(predictions[:,2]), max(predictions[:,2]))
         #print(min(predictions[:,3]), max(predictions[:,3]))
-        predictions[:,0][predictions[:,0] > 0.99999] = 0.99999
-        predictions[:,1][predictions[:,1] > 0.99999] = 0.99999
-        predictions[:,2][predictions[:,2] > 0.99999] = 0.99999
-        predictions[:,3][predictions[:,3] > 0.99999] = 0.99999
-        predictions[:,0][predictions[:,0] < 0.000001] = 0.000001
-        predictions[:,1][predictions[:,1] < 0.000001] = 0.000001
-        predictions[:,2][predictions[:,2] < 0.000001] = 0.000001
-        predictions[:,3][predictions[:,3] < 0.000001] = 0.000001
+
+        for i in range(4):
+            predictions[:,i][predictions[:,i] > 0.99999] = 0.99999  
+            predictions[:,i][predictions[:,i] < 0.000001] = 0.000001  
+        
         print('Raw b, bb, c, l min and max (after cutting over-/underflow)')
         print(min(predictions[:,0]), max(predictions[:,0]))
         print(min(predictions[:,1]), max(predictions[:,1]))
         print(min(predictions[:,2]), max(predictions[:,2]))
         print(min(predictions[:,3]), max(predictions[:,3]))
+
         np.save(outputPredsdir, predictions)
         del predictions
         gc.collect()
-
+        
         if isMC == True:
 
-            noise_preds = predict(apply_noise(inputs, scalers, magn=1e-2,offset=[0]), targets, scalers, wm)
-            #hist, bin_edges = np.histogram(noise_preds[:,0],bins=20)
-            #print('Flavour b noise_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #hist, bin_edges = np.histogram(noise_preds[:,1],bins=20)
-            #print('Flavour bb noise_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #hist, bin_edges = np.histogram(noise_preds[:,2],bins=20)
-            #print('Flavour c noise_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #hist, bin_edges = np.histogram(noise_preds[:,3],bins=20)
-            #print('Flavour udsg noise_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            noise_bvl = calcBvsL(noise_preds)
-            #print(bvl[:100])
+            noise_preds = predict(apply_noise(inputs, scalers, magn=1e-2,offset=[0]), wm)
+            
             print('Noise bvl, bvc, cvb, cvl')
+            noise_bvl = calcBvsL(noise_preds)
             print(min(noise_bvl), max(noise_bvl))
             np.save(noise_outputBvsLdir, noise_bvl)
             del noise_bvl
@@ -858,80 +661,35 @@ if __name__ == "__main__":
             gc.collect()
 
             noise_cvb = calcCvsB(noise_preds)
-            #hist, bin_edges = np.histogram(noise_cvb)
-            #print('noise_cvb: bin_edges and histogram before assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            ## handle division by 0 and assign -1 (if either CvsB or CvsL would be undefined)
-            #noise_cvb[(noise_preds[:,0]+noise_preds[:,1]+noise_preds[:,2]) == 0] = -1
-            #noise_cvb[(noise_preds[:,3]+noise_preds[:,2]) == 0] = -1
-            #hist, bin_edges = np.histogram(noise_cvb,bins=20)
-            #print('noise_cvb: bin_edges and histogram after assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #print(bvl[:100])
             print(min(noise_cvb), max(noise_cvb))
             np.save(noise_outputCvsBdir, noise_cvb)
             del noise_cvb
             gc.collect()
+
             noise_cvl = calcCvsL(noise_preds)
-            #hist, bin_edges = np.histogram(noise_cvl)
-            #print('noise_cvl: bin_edges and histogram before assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            #noise_cvl[(noise_preds[:,0]+noise_preds[:,1]+noise_preds[:,2]) == 0] = -1
-            #noise_cvl[(noise_preds[:,3]+noise_preds[:,2]) == 0] = -1
-            #hist, bin_edges = np.histogram(noise_cvl,bins=20)
-            #print('noise_cvl: bin_edges and histogram after assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #print(bvl[:100])
             print(min(noise_cvl), max(noise_cvl))
             np.save(noise_outputCvsLdir, noise_cvl)
             del noise_cvl
-            noise_preds[:,0][noise_preds[:,0] > 0.99999] = 0.99999
-            noise_preds[:,1][noise_preds[:,1] > 0.99999] = 0.99999
-            noise_preds[:,2][noise_preds[:,2] > 0.99999] = 0.99999
-            noise_preds[:,3][noise_preds[:,3] > 0.99999] = 0.99999
-            noise_preds[:,0][noise_preds[:,0] < 0.000001] = 0.000001
-            noise_preds[:,1][noise_preds[:,1] < 0.000001] = 0.000001
-            noise_preds[:,2][noise_preds[:,2] < 0.000001] = 0.000001
-            noise_preds[:,3][noise_preds[:,3] < 0.000001] = 0.000001
+
+            for i in range(4):
+                noise_preds[:,i][noise_preds[:,i] > 0.99999] = 0.99999  
+                noise_preds[:,i][noise_preds[:,i] < 0.000001] = 0.000001  
+        
+
             print('Noise b, bb, c, l min and max (after cutting over-/underflow)')
             print(min(noise_preds[:,0]), max(noise_preds[:,0]))
             print(min(noise_preds[:,1]), max(noise_preds[:,1]))
             print(min(noise_preds[:,2]), max(noise_preds[:,2]))
             print(min(noise_preds[:,3]), max(noise_preds[:,3]))
+
             np.save(noise_outputPredsdir, noise_preds)
             del noise_preds
             gc.collect()
 
 
-            fgsm_preds = predict(fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True, scalers=scalers), targets, scalers, wm)
-            #hist, bin_edges = np.histogram(fgsm_preds[:,0],bins=20)
-            #print('Flavour b fgsm_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #hist, bin_edges = np.histogram(fgsm_preds[:,1],bins=20)
-            #print('Flavour bb fgsm_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #hist, bin_edges = np.histogram(fgsm_preds[:,2],bins=20)
-            #print('Flavour c fgsm_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
-            #hist, bin_edges = np.histogram(fgsm_preds[:,3],bins=20)
-            #print('Flavour udsg fgsm_preds: bin_edges and histogram')
-            #print(bin_edges)
-            #print(hist)
+            fgsm_preds = predict(fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True, scalers=scalers), wm)
+            
             fgsm_bvl = calcBvsL(fgsm_preds)
-            #print(bvl[:100])
             print('FGSM bvl, bvc, cvb, cvl')
             print(min(fgsm_bvl), max(fgsm_bvl))
             np.save(fgsm_outputBvsLdir, fgsm_bvl)
@@ -945,51 +703,20 @@ if __name__ == "__main__":
             gc.collect()
 
             fgsm_cvb = calcCvsB(fgsm_preds)
-            #hist, bin_edges = np.histogram(fgsm_cvb)
-            #print('fgsm_cvb: bin_edges and histogram before assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            ## handle division by 0 and assign -1 (if either CvsB or CvsL would be undefined)
-            #fgsm_cvb[(fgsm_preds[:,0]+fgsm_preds[:,1]+fgsm_preds[:,2]) == 0] = -1
-            #fgsm_cvb[(fgsm_preds[:,3]+fgsm_preds[:,2]) == 0] = -1
-            #hist, bin_edges = np.histogram(fgsm_cvb,bins=20)
-            #print('fgsm_cvb: bin_edges and histogram after assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #print(bvl[:100])
             print(min(fgsm_cvb), max(fgsm_cvb))
             np.save(fgsm_outputCvsBdir, fgsm_cvb)
             del fgsm_cvb
             gc.collect()
+
             fgsm_cvl = calcCvsL(fgsm_preds)
-            #hist, bin_edges = np.histogram(fgsm_cvl)
-            #print('fgsm_cvl: bin_edges and histogram before assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            #fgsm_cvl[(fgsm_preds[:,0]+fgsm_preds[:,1]+fgsm_preds[:,2]) == 0] = -1
-            #fgsm_cvl[(fgsm_preds[:,3]+fgsm_preds[:,2]) == 0] = -1
-            #hist, bin_edges = np.histogram(fgsm_cvl,bins=20)
-            #print('fgsm_cvl: bin_edges and histogram after assigning -1')
-            #print(bin_edges)
-            #print(hist)
-            #del hist
-            #del bin_edges
-            #gc.collect()
-            #print(bvl[:100])
             print(min(fgsm_cvl), max(fgsm_cvl))
             np.save(fgsm_outputCvsLdir, fgsm_cvl)
             del fgsm_cvl
-            fgsm_preds[:,0][fgsm_preds[:,0] > 0.99999] = 0.99999
-            fgsm_preds[:,1][fgsm_preds[:,1] > 0.99999] = 0.99999
-            fgsm_preds[:,2][fgsm_preds[:,2] > 0.99999] = 0.99999
-            fgsm_preds[:,3][fgsm_preds[:,3] > 0.99999] = 0.99999
-            fgsm_preds[:,0][fgsm_preds[:,0] < 0.000001] = 0.000001
-            fgsm_preds[:,1][fgsm_preds[:,1] < 0.000001] = 0.000001
-            fgsm_preds[:,2][fgsm_preds[:,2] < 0.000001] = 0.000001
-            fgsm_preds[:,3][fgsm_preds[:,3] < 0.000001] = 0.000001
+
+            for i in range(4):
+                fgsm_preds[:,i][fgsm_preds[:,i] > 0.99999] = 0.99999  
+                fgsm_preds[:,i][fgsm_preds[:,i] < 0.000001] = 0.000001
+                
             print('FGSM b, bb, c, l min and max (after cutting over-/underflow)')
             print(min(fgsm_preds[:,0]), max(fgsm_preds[:,0]))
             print(min(fgsm_preds[:,1]), max(fgsm_preds[:,1]))
