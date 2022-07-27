@@ -18,6 +18,8 @@ default = 0.001
 
 defaults_per_variable = minima - default
 
+scalers = []
+
 def cleandataset(f, isMC):
     print('Doing cleaning, isMC = ',isMC)
     
@@ -114,48 +116,55 @@ def preprocess(rootfile, isMC):
     #print(f"Shape of dataset returned from cleaning:{np.shape(dataset_input_target)}")
     
     inputs = torch.Tensor(dataset_input_target[:,0:67])
-    #print(f"Shape of input tensors:{inputs.size()}")
+    scaled_defaults = np.zeros_like(defaults_per_variable[0:67])
     
     # targets only make sense for MC, but nothing 'breaks' when calling it on Data (the last column is different though)
     targets = torch.Tensor(dataset_input_target[:,-1]).long()
     #print(torch.unique(targets))        
-    scalers = []
     
     for i in range(0,67): # use already calculated scalers (same for all files),
         # for the calculation, only train samples and only non-defaults were used
         #scaler = StandardScaler().fit(inputs[:,i][inputs[:,i]!=defaults_per_variable[i]].reshape(-1,1))
-        scaler = torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt')
-        inputs[:,i]   = torch.Tensor(scaler.transform(inputs[:,i].reshape(-1,1)).reshape(1,-1))
+        scaler              = torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt')
+        inputs[:,i]         = torch.Tensor(scaler.transform(inputs[:,i].reshape(-1,1)).reshape(1,-1))
+        scaled_defaults[i]  = scaler.transform(defaults_per_variable[i].reshape(-1,1)).reshape(1,-1)
+
         scalers.append(scaler)
 
-    return inputs, targets, scalers
+    scaled_defaults = torch.Tensor(scaled_defaults)
 
-def apply_noise(sample, scalers, magn=1e-2,offset=[0]):
+    return inputs, targets, scaled_defaults
+
+def apply_noise(sample, magn=1e-2,offset=[0], scaled_defaults_per_variable=[]):
     with torch.no_grad():
         device = torch.device("cpu")
-        #scalers = torch.load(scalers_file_paths[s])
-        #test_inputs =  torch.load(test_input_file_paths[s]).to(device).float()
-        #val_inputs =  torch.load(val_input_file_paths[s]).to(device).float()
-        #train_inputs =  torch.load(train_input_file_paths[s]).to(device).float()
-        #test_targets =  torch.load(test_target_file_paths[s]).to(device)
-        #val_targets =  torch.load(val_target_file_paths[s]).to(device)
-        #train_targets =  torch.load(train_target_file_paths[s]).to(device)            
-        #all_inputs = torch.cat((test_inputs,val_inputs,train_inputs))
-
-        noise = torch.Tensor(np.random.normal(offset,magn,(len(sample),67))).to(device)
+        
+        size_of_sample = len(sample)
+        noise = torch.Tensor(np.random.normal(offset,magn,(size_of_sample,67))).to(device)
         xadv = sample + noise
-        #all_inputs_noise = all_inputs + noise
-        #xadv = scalers[variable].inverse_transform(all_inputs_noise[:,variable].cpu())
+        
         integervars = [59,63,64,65,66]
+
         for variable in integervars:
             xadv[:,variable] = sample[:,variable]
 
-
+        percentage_of_default_samples = torch.zeros_like(scaled_defaults_per_variable)
+        
         for i in range(67):
-            defaults = abs(scalers[i].inverse_transform(sample[:,i].cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
-            if np.sum(defaults) != 0:
+            #defaults = abs(scalers[i].inverse_transform(sample[:,i].reshape(-1,1).cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
+            #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.001   # if sample == scaled_default then True otherwise False
+            #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.0001   # if sample == scaled_default then True otherwise False
+            defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) == 0   # if sample == scaled_default then True otherwise False
+            percentage_of_default_samples[i] = (torch.sum(defaults)*100)/size_of_sample
+
+            if torch.sum(defaults) != 0: 
                 xadv[:,i][defaults] = sample[:,i][defaults]
 
+        torch.set_printoptions(sci_mode=False)
+        print(f"with == 0")
+        print(f"percentage of samples that are defaults per variable:{torch.round(percentage_of_default_samples)}")
+        print(f"percentage of samples that are defaults for all variables: {torch.sum(percentage_of_default_samples):0.0f}")
+        sys.exit()
         return xadv
 
 def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scalers=None):
@@ -501,8 +510,9 @@ if __name__ == "__main__":
     global n_jets
     
     #inputs, targets, scalers = preprocess(fullName, isMC)           # use this if running script interactively 
-    inputs, targets, scalers = preprocess('infile.root', isMC)      # use this if running script from condor_runscript_xxx.sh
-    
+    inputs, targets, scaled_defaults = preprocess('infile.root', isMC)      # use this if running script from condor_runscript_xxx.sh
+    noise_preds = predict(apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults), wm)
+
     n_jets = len(targets)
     
     # to check multiple epochs of a given weighting method at once (using always 3 epochs should make sense, as previous tests were done on raw/noise/FGSM = 3 different sets)
@@ -644,8 +654,7 @@ if __name__ == "__main__":
         gc.collect()
         
         if isMC == True:
-
-            noise_preds = predict(apply_noise(inputs, scalers, magn=1e-2,offset=[0]), wm)
+            noise_preds = predict(apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults), wm)
             
             print('Noise bvl, bvc, cvb, cvl')
             noise_bvl = calcBvsL(noise_preds)
@@ -687,7 +696,7 @@ if __name__ == "__main__":
             gc.collect()
 
 
-            fgsm_preds = predict(fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True, scalers=scalers), wm)
+            fgsm_preds = predict(fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True), wm)
             
             fgsm_bvl = calcBvsL(fgsm_preds)
             print('FGSM bvl, bvc, cvb, cvl')
