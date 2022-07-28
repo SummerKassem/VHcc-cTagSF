@@ -4,6 +4,9 @@ import uproot as uproot
 import numpy as np
 import awkward as ak
 
+import matplotlib.pyplot as plt
+import coffea.hist as hist
+
 import gc
 
 import torch
@@ -150,11 +153,42 @@ def apply_noise(sample, magn=1e-2,offset=[0], scaled_defaults_per_variable=[]):
 
         percentage_of_default_samples = torch.zeros_like(scaled_defaults_per_variable)
         
-        for i in range(67):
+        index = 1
+        what_to_plot = sample[:,index].numpy()
+        
+        histogram = hist.Hist("Jets",
+                              hist.Cat("sample","sample name"),
+                              hist.Bin("prop",f"variable number {index}", 100, min(what_to_plot)-0.2, max(what_to_plot)+0.2))
+        
+        print(f"Index is:{index}, scaled_default is:{scaled_defaults_per_variable[index]}")
+
+        defaults1 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) < 0.001   
+        defaults2 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) < 0.0001  
+        defaults3 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) == 0 
+
+        print(f"Number of samples:")
+        print(f"abs(difference) < 0.001 :: {len(sample[:,index][defaults1])}")
+        print(f"abs(difference) < 0.0001 :: {len(sample[:,index][defaults2])}")
+        print(f"abs(difference) == 0 :: {len(sample[:,index][defaults3])}")
+
+        histogram.fill(sample = "all",      prop = what_to_plot)
+        histogram.fill(sample = "< 0.001",  prop = sample[:,index][defaults1].numpy())
+        histogram.fill(sample = "< 0.0001", prop = sample[:,index][defaults2].numpy())
+        histogram.fill(sample = "== 0",     prop = sample[:,index][defaults3].numpy())
+        
+        _, ax1 = plt.subplots(1,1,figsize=[10,6])
+        hist.plot1d(histogram, overlay='sample', ax = ax1)
+        ax1.set_yscale('log')
+        ax1.autoscale()
+        plt.show()
+                            
+        sys.exit()
+        #for i in range(67):
+        for i in range(65,67):
             #defaults = abs(scalers[i].inverse_transform(sample[:,i].reshape(-1,1).cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
             #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.001   # if sample == scaled_default then True otherwise False
-            #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.0001   # if sample == scaled_default then True otherwise False
-            defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) == 0   # if sample == scaled_default then True otherwise False
+            defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.0001   # if sample == scaled_default then True otherwise False
+            #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) == 0   # if sample == scaled_default then True otherwise False
             percentage_of_default_samples[i] = (torch.sum(defaults)*100)/size_of_sample
 
             if torch.sum(defaults) != 0: 
