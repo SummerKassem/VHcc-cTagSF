@@ -33,7 +33,6 @@ else:
 JECName = JECNameList[JECidx]
 
 maxEvents=-1
-
 print "#########"*10
 print "start_time : ",time.ctime()
 print "processing on : ",fullName
@@ -43,7 +42,9 @@ isNano = False
 pref = ""
 parentDir = ""
 era = 2016
-isCustomDeepJet = True
+
+#isCustomDeepJet = True
+isCustomDeepJet = False
 
 pnfspref = "/pnfs/desy.de/cms/tier2/"
 
@@ -60,7 +61,7 @@ else:
     print "Forcing AAA."
     if not fullName.startswith("/store/"):
         fileName = "/" + '/'.join(fullName.split('/')[fullName.split('/').index("store"):])
-print "Will open file %s."%(pref+fileName)
+print "Will open file %s"%(pref+fileName)
 
 parentDirList = ["VHcc_2017V5_Dec18/","NanoCrabProdXmas/","/2016/","2016_v2/","/2017/","2017_v2","/2018/","VHcc_2016V4bis_Nov18/","/106X_v2_17/","/106X_v2_17rsb2/","/106X_v2_17rsb3/","/nanotest_add_DeepJet/"]
 for iParent in parentDirList:
@@ -99,14 +100,17 @@ if "2018" and not "2017" in fullName: era = 2018
 #iFile = TFile.Open(str(sys.argv[2])+"/infile.root")
 print "Current working directory: %s" % os.getcwd()
 print "Files in this directory: %s" % os.listdir(os.getcwd())
-iFile = TFile.Open("infile.root")
+iFile = TFile.Open("infile.root") 
 #iFile = TFile.Open("/afs/desy.de/user/a/anstein/private/aisafety/SF/VHcc-cTagSF/Analyzer/nano_mc2017_1-1156.root")
 inputTree = iFile.Get("Events")
 inputTree.SetBranchStatus("*",1)
 
 sampName=fullName.split(parentDir)[1].split('/')[0]
 channel=sampName
-sampNo=fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+# for PostProc files
+#sampNo=fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+# for PFNano files
+sampNo=fullName.split(parentDir)[1].split('/')[1]
 dirNo=fullName.split(parentDir)[1].split('/')[3][-1]
 flNo=fullName.split(parentDir)[1].split('/')[-1].rstrip('.root').split('_')[-1]
 outNo= "%s_%s_%s"%(sampNo,dirNo,flNo)
@@ -142,9 +146,11 @@ if "OUTPUTDIR" in os.environ:
         #print "Output file already exists. Aborting job."
         print "Outfile file: %s"%condoroutfile
         #sys.exit(99)  # currently deactivated (overwrite file instead)
+
 #if isMC:
     #customTaggerProbs = np.load("%s/%s/outPreds_%s_new.npy"%(condoroutdir,sampName,outNo))  # just do it with the loss weighted model first here
     #customTaggerBvsL  = np.load("%s/%s/outBvsL_%s_new.npy"%(condoroutdir,sampName,outNo))  # if one wants no weighting, replace _new with _as_is
+    
 if not os.path.isfile("A_outPreds_%s.npy"%(outNo)):
     customTaggerProbs = np.load("outPreds_%s.npy"%(outNo))  # same for all weighting methods, one has to keep track of the w.m. in the runscript and the output directory there
     customTaggerBvsL  = np.load("outBvsL_%s.npy"%(outNo))  # this makes it easier because now one does not have to change this everytime in this Analyzer script

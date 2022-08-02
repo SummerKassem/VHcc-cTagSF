@@ -4,8 +4,8 @@ import uproot as uproot
 import numpy as np
 import awkward as ak
 
-import matplotlib.pyplot as plt
-import coffea.hist as hist
+#import matplotlib.pyplot as plt
+#import coffea.hist as hist
 
 import gc
 
@@ -20,8 +20,7 @@ minima = np.load('/nfs/dust/cms/user/summer/additional_files/minima.npy')
 default = 0.001
 
 defaults_per_variable = minima - default
-
-scalers = []
+threshold = 0.001
 
 def cleandataset(f, isMC):
     print('Doing cleaning, isMC = ',isMC)
@@ -132,8 +131,6 @@ def preprocess(rootfile, isMC):
         inputs[:,i]         = torch.Tensor(scaler.transform(inputs[:,i].reshape(-1,1)).reshape(1,-1))
         scaled_defaults[i]  = scaler.transform(defaults_per_variable[i].reshape(-1,1)).reshape(1,-1)
 
-        scalers.append(scaler)
-
     scaled_defaults = torch.Tensor(scaled_defaults)
 
     return inputs, targets, scaled_defaults
@@ -151,57 +148,15 @@ def apply_noise(sample, magn=1e-2,offset=[0], scaled_defaults_per_variable=[]):
         for variable in integervars:
             xadv[:,variable] = sample[:,variable]
 
-        percentage_of_default_samples = torch.zeros_like(scaled_defaults_per_variable)
-        
-        index = 1
-        what_to_plot = sample[:,index].numpy()
-        
-        histogram = hist.Hist("Jets",
-                              hist.Cat("sample","sample name"),
-                              hist.Bin("prop",f"variable number {index}", 100, min(what_to_plot)-0.2, max(what_to_plot)+0.2))
-        
-        print(f"Index is:{index}, scaled_default is:{scaled_defaults_per_variable[index]}")
-
-        defaults1 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) < 0.001   
-        defaults2 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) < 0.0001  
-        defaults3 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) == 0 
-
-        print(f"Number of samples:")
-        print(f"abs(difference) < 0.001 :: {len(sample[:,index][defaults1])}")
-        print(f"abs(difference) < 0.0001 :: {len(sample[:,index][defaults2])}")
-        print(f"abs(difference) == 0 :: {len(sample[:,index][defaults3])}")
-
-        histogram.fill(sample = "all",      prop = what_to_plot)
-        histogram.fill(sample = "< 0.001",  prop = sample[:,index][defaults1].numpy())
-        histogram.fill(sample = "< 0.0001", prop = sample[:,index][defaults2].numpy())
-        histogram.fill(sample = "== 0",     prop = sample[:,index][defaults3].numpy())
-        
-        _, ax1 = plt.subplots(1,1,figsize=[10,6])
-        hist.plot1d(histogram, overlay='sample', ax = ax1)
-        ax1.set_yscale('log')
-        ax1.autoscale()
-        plt.show()
-                            
-        sys.exit()
-        #for i in range(67):
-        for i in range(65,67):
-            #defaults = abs(scalers[i].inverse_transform(sample[:,i].reshape(-1,1).cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
-            #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.001   # if sample == scaled_default then True otherwise False
-            defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) < 0.0001   # if sample == scaled_default then True otherwise False
-            #defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) == 0   # if sample == scaled_default then True otherwise False
-            percentage_of_default_samples[i] = (torch.sum(defaults)*100)/size_of_sample
-
+        for i in range(67):
+            defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) <= threshold   # creates an array of true/false which if sample == scaled_default then True otherwise False
+            
             if torch.sum(defaults) != 0: 
                 xadv[:,i][defaults] = sample[:,i][defaults]
 
-        torch.set_printoptions(sci_mode=False)
-        print(f"with == 0")
-        print(f"percentage of samples that are defaults per variable:{torch.round(percentage_of_default_samples)}")
-        print(f"percentage of samples that are defaults for all variables: {torch.sum(percentage_of_default_samples):0.0f}")
-        sys.exit()
         return xadv
 
-def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scalers=None):
+def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scaled_defaults_per_variable=[]):
     device = torch.device("cpu")
     xadv = sample.clone().detach()
     
@@ -235,13 +190,17 @@ def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scalers=None
         #remove the impact on selected variables. This is nessecary to avoid problems that occur otherwise in the input shapes.
         if reduced:
             integervars = [59,63,64,65,66]
+
             for variable in integervars:
                 xadv[:,variable] = sample[:,variable]
 
             for i in range(67):
-                defaults = abs(scalers[i].inverse_transform(sample[:,i].cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
-                if np.sum(defaults) != 0:
+                #defaults = abs(scalers[i].inverse_transform(sample[:,i].cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
+                defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) <= threshold   # creates an array of true/false which if sample == scaled_default then True otherwise False
+
+                if torch.sum(defaults) != 0:
                     xadv[:,i][defaults] = sample[:,i][defaults]
+
         return xadv.detach()
 
 def predict(inputs, method):
@@ -526,7 +485,10 @@ if __name__ == "__main__":
     
     sampName=   fullName.split(parentDir)[1].split('/')[0]
     channel =   sampName
-    sampNo  =   fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+    # for PostProc files
+    #sampNo =   fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+    # for PFNano files
+    sampNo  =   fullName.split(parentDir)[1].split('/')[1]
     dirNo   =   fullName.split(parentDir)[1].split('/')[3][-1]
     flNo    =   fullName.split(parentDir)[1].split('/')[-1].rstrip('.root').split('_')[-1]
     outNo   =   "%s_%s_%s"%(sampNo,dirNo,flNo)
@@ -543,10 +505,9 @@ if __name__ == "__main__":
     
     global n_jets
     
-    #inputs, targets, scalers = preprocess(fullName, isMC)           # use this if running script interactively 
+    #inputs, targets, scalers = preprocess(fullName, isMC)                  # use this if running script interactively 
     inputs, targets, scaled_defaults = preprocess('infile.root', isMC)      # use this if running script from condor_runscript_xxx.sh
-    noise_preds = predict(apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults), wm)
-
+    
     n_jets = len(targets)
     
     # to check multiple epochs of a given weighting method at once (using always 3 epochs should make sense, as previous tests were done on raw/noise/FGSM = 3 different sets)
@@ -678,17 +639,16 @@ if __name__ == "__main__":
             predictions[:,i][predictions[:,i] < 0.000001] = 0.000001  
         
         print('Raw b, bb, c, l min and max (after cutting over-/underflow)')
-        print(min(predictions[:,0]), max(predictions[:,0]))
-        print(min(predictions[:,1]), max(predictions[:,1]))
-        print(min(predictions[:,2]), max(predictions[:,2]))
-        print(min(predictions[:,3]), max(predictions[:,3]))
+        for i in range(4):
+            print(min(predictions[:,i]), max(predictions[:,i]))
 
         np.save(outputPredsdir, predictions)
         del predictions
         gc.collect()
         
         if isMC == True:
-            noise_preds = predict(apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults), wm)
+            noise_sample = apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults)
+            noise_preds = predict(noise_sample, wm)
             
             print('Noise bvl, bvc, cvb, cvl')
             noise_bvl = calcBvsL(noise_preds)
@@ -720,17 +680,15 @@ if __name__ == "__main__":
         
 
             print('Noise b, bb, c, l min and max (after cutting over-/underflow)')
-            print(min(noise_preds[:,0]), max(noise_preds[:,0]))
-            print(min(noise_preds[:,1]), max(noise_preds[:,1]))
-            print(min(noise_preds[:,2]), max(noise_preds[:,2]))
-            print(min(noise_preds[:,3]), max(noise_preds[:,3]))
-
+            for i in range(4):
+                print(min(noise_preds[:,i]), max(noise_preds[:,i]))
+            
             np.save(noise_outputPredsdir, noise_preds)
             del noise_preds
             gc.collect()
 
-
-            fgsm_preds = predict(fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True), wm)
+            fgsm_sample = fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True, scaled_defaults_per_variable = scaled_defaults)
+            fgsm_preds = predict(fgsm_sample, wm)
             
             fgsm_bvl = calcBvsL(fgsm_preds)
             print('FGSM bvl, bvc, cvb, cvl')
@@ -761,10 +719,76 @@ if __name__ == "__main__":
                 fgsm_preds[:,i][fgsm_preds[:,i] < 0.000001] = 0.000001
                 
             print('FGSM b, bb, c, l min and max (after cutting over-/underflow)')
-            print(min(fgsm_preds[:,0]), max(fgsm_preds[:,0]))
-            print(min(fgsm_preds[:,1]), max(fgsm_preds[:,1]))
-            print(min(fgsm_preds[:,2]), max(fgsm_preds[:,2]))
-            print(min(fgsm_preds[:,3]), max(fgsm_preds[:,3]))
+            for i in range(4):
+                print(min(fgsm_preds[:,i]), max(fgsm_preds[:,i]))
+                
             np.save(fgsm_outputPredsdir, fgsm_preds)
             del fgsm_preds
             gc.collect()
+
+'''
+percentage_of_default_samples = torch.zeros_like(scaled_defaults_per_variable)
+        
+index = 1
+what_to_plot = sample[:,index].numpy()
+
+histogram = hist.Hist("Jets",
+                        hist.Cat("sample","sample name"),
+                        hist.Bin("prop",f"variable number {index}", 100, min(what_to_plot)-0.2, max(what_to_plot)+0.2))
+
+print(f"Index is:{index}, scaled_default is:{scaled_defaults_per_variable[index]}")
+
+defaults1 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) < 0.001   
+defaults2 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) < 0.0001  
+defaults3 = abs(sample[:,index].cpu() - scaled_defaults_per_variable[index].cpu()) == 0 
+
+print(f"Number of samples:")
+print(f"abs(difference) < 0.001 :: {len(sample[:,index][defaults1])}")
+print(f"abs(difference) < 0.0001 :: {len(sample[:,index][defaults2])}")
+print(f"abs(difference) == 0 :: {len(sample[:,index][defaults3])}")
+
+histogram.fill(sample = "all",      prop = what_to_plot)
+histogram.fill(sample = "< 0.001",  prop = sample[:,index][defaults1].numpy())
+histogram.fill(sample = "< 0.0001", prop = sample[:,index][defaults2].numpy())
+histogram.fill(sample = "== 0",     prop = sample[:,index][defaults3].numpy())
+
+_, ax1 = plt.subplots(1,1,figsize=[10,6])
+hist.plot1d(histogram, overlay='sample', ax = ax1)
+ax1.set_yscale('log')
+ax1.autoscale()
+plt.show()
+                    
+sys.exit()
+
+index = 21
+threshold = 0
+
+predictions = predict(inputs, weightingMethod)
+raw_sample      = inputs[:,index].numpy()
+noise_sample    = apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults)[:,index].numpy()
+fgsm_sample     = fgsm_attack(epsilon=1e-2, sample=inputs, targets=targets, reduced=True, scaled_defaults_per_variable = scaled_defaults)[:,index].numpy()
+
+minimum = min(min(min(raw_sample),min(noise_sample)), min(fgsm_sample)) - 0.1
+maximum = max(max(max(raw_sample),max(noise_sample)), max(fgsm_sample)) + 0.1
+
+histogram = hist.Hist("Jets",
+                        hist.Cat("sample","sample name"),
+                        hist.Bin("prop",f"variable number {index}", 100, minimum, maximum))
+
+print(f"Variable is:{index}, scaled_default is:{scaled_defaults[index]}")
+
+histogram.fill(sample = "raw",   prop = raw_sample)
+histogram.fill(sample = "fgsm",  prop = fgsm_sample)
+histogram.fill(sample = "noise", prop = noise_sample)
+
+_, ax1 = plt.subplots(1,1,figsize=[10,6])
+hist.plot1d(histogram, overlay='sample', ax = ax1)
+ax1.set_yscale('log')
+ax1.autoscale()
+plt.title(f"Threshold is {threshold}")
+plt.show()
+                    
+sys.exit()
+
+        
+'''

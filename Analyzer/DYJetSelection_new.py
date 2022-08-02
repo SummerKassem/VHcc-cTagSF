@@ -31,7 +31,7 @@ isNano = False
 pref = ""
 parentDir = ""
 era = 2016
-isCustomDeepJet = True
+isCustomDeepJet = False #True
 
 pnfspref = "/pnfs/desy.de/cms/tier2/"
 
@@ -67,7 +67,10 @@ inputTree.SetBranchStatus("*",1)
 
 sampName=fullName.split(parentDir)[1].split('/')[0]
 channel=sampName
-sampNo=fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+# for PostProc files
+#sampNo=fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+# for PFNano files
+sampNo=fullName.split(parentDir)[1].split('/')[1]
 dirNo=fullName.split(parentDir)[1].split('/')[3][-1]
 flNo=fullName.split(parentDir)[1].split('/')[-1].rstrip('.root').split('_')[-1]
 outNo= "%s_%s_%s"%(sampNo,dirNo,flNo)
