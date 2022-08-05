@@ -1,4 +1,4 @@
-	OUTPUTDIR=/nfs/dust/cms/user/anstein/ctag_condor/systPlots_210711_2017_notflat_200_gamma25.0_alphaNone/Plots_210711_notflat_200_gamma25.0_alphaNone_minimal_CustomFGSM/
+	OUTPUTDIR=/nfs/dust/cms/user/summer/ctag_condor/Plots_210711_200_customNominal/
 	OUTPUTNAME=output_2017_PFNano
 
 	CONDOR_CLUSTER_ID=$1
@@ -23,11 +23,12 @@
         klist -f
         echo "creating tempdir and copy"
         tmp_dir=$(mktemp -d)
-        cp -r ../Stacker.py cmdList.txt ../Deep*.root ../samplesDict.py $tmp_dir
+        cp -r ../Stacker.py cmdList.txt ../samplesDict.py $tmp_dir
 
         echo "setting up the environment"
         cd /cvmfs/cms.cern.ch/slc7_amd64_gcc820/cms/cmssw/CMSSW_11_1_0_p3_ROOT618/src/
-        source /cvmfs/cms.cern.ch/cmsset_default.sh
+        #source /cvmfs/cms.cern.ch/cmsset_default.sh
+        source /afs/desy.de/user/s/spmondal/public/cmsset_default.sh
         eval `scramv1 runtime -sh`
         echo "echo PATH:"
         echo $PATH

@@ -84,7 +84,8 @@ def makeHisto(dir,treeName,brName,brLabel,nbins,start,end,weightName="",selectio
 #        if "Run2018A" in fl or "Run2018B" in fl or "Run2018C" in fl: continue
         iF = ROOT.TFile.Open(fl)
         if bool(iF) == False or iF.IsZombie():
-            print "Error in file %s, skipping."%fl
+            #print "Error in file %s, skipping."%fl
+            print("Error in file %s, skipping."%fl)
             continue
         myChain.Add(fl)
         hTotal = iF.Get("h_total")
@@ -143,8 +144,10 @@ def makeHisto(dir,treeName,brName,brLabel,nbins,start,end,weightName="",selectio
             eventWeight = weightName.split('*')[0]
         else:
             eventWeight = weightName
-    print "weightName: %s" % weightName
-    print "eventWeight: %s" % eventWeight
+    #print "weightName: %s" % weightName
+    #print "eventWeight: %s" % eventWeight
+    print("weightName: %s" % weightName)
+    print("eventWeight: %s" % eventWeight)
     DF = DF.Define("newWeight",eventWeight)
     
     sampSels = ""
@@ -290,9 +293,11 @@ def makeHisto(dir,treeName,brName,brLabel,nbins,start,end,weightName="",selectio
                     else:
                         SFBinCounts[binidx][thisKey][flName] = oldwt
 
-                    if binidx == 18: print thisKey,oldwt,CvsBval,CvsLval 
+                    #if binidx == 18: print thisKey,oldwt,CvsBval,CvsLval 
+                    if binidx == 18: print(thisKey,oldwt,CvsBval,CvsLval)
                 tempf.Close()
-                print "    Evaluated SF uncertainties for flavour", flav
+                #print "    Evaluated SF uncertainties for flavour", flav
+                print("    Evaluated SF uncertainties for flavour", flav)
 
                 '''
                         TFile root_file("StackerTemp.root");
@@ -362,7 +367,8 @@ def makeHisto(dir,treeName,brName,brLabel,nbins,start,end,weightName="",selectio
                                 )        
     
     
-    print dir, nTotalEvents    
+    #print dir, nTotalEvents    
+    print(dir, nTotalEvents)
         
     
     if divideByFlav:
@@ -376,7 +382,8 @@ def makeHisto(dir,treeName,brName,brLabel,nbins,start,end,weightName="",selectio
 
 def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", isLog=False, filePre="",filePre2="",filePost="", MCWeightName=MCWeightName, DataWeightName=DataWeightName, nminus1=False, doCombine=False,brName2D="",brLabel2="",nbins2=5,start2=0,end2=1, finalHistList=[], histoDList=[], drawStyle="",varBin1=[],varBin2=[],makePNG=True,makeROOT=False,noRatio=False,yTitle=yTitle,outDir=outDir,rootPath=rootPath,pathSuff="",useXSecUnc="",MCStat="",dataStat="",SFfile="",SFhistSuff="",drawDataMCRatioLine=False,normTotalMC=False,binWtTxt=False, getSFUnc = False):
     if not makePNG and not makeROOT:
-        print "Neither PNG nor ROOT output was asked for. Exiting."
+        #print "Neither PNG nor ROOT output was asked for. Exiting."
+        print("Neither PNG nor ROOT output was asked for. Exiting.")
         sys.exit(1)
     filePre += filePre2
     global lumi
@@ -412,8 +419,10 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
         if "above40" in SFfile or "below40" in SFfile:
             splitbypT = True
             
-        print "Tagger Pref:", taggerPref
-        print "Split by pT:", splitbypT
+        #print "Tagger Pref:", taggerPref
+        #print "Split by pT:", splitbypT
+        print("Tagger Pref:", taggerPref)
+        print("Split by pT:", splitbypT)
         
         if splitbypT:
             gInpCmd = '''
@@ -446,13 +455,16 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
 
         
         gInpCmd = gInpCmd.replace("PREF",taggerPref).replace("ADAP",adapDir).replace("HISTSUFF",SFhistSuff)
-        print "\nLoading SF histograms:"
-        print gInpCmd  
+        #print "\nLoading SF histograms:"
+        #print gInpCmd  
+        print("\nLoading SF histograms:")
+        print(gInpCmd)
         ROOT.gInterpreter.ProcessLine(gInpCmd)
         
         outDir.rstrip('/')
         outDir += "_" + '_'.join(SFfile.rstrip('.root').split('_')[3:])
-        print "Using c-tag SF file:", SFfile
+        #print "Using c-tag SF file:", SFfile
+        print("Using c-tag SF file:", SFfile)
 
         if getSFUnc:
             global SFUnc, SFBinCounts
@@ -510,11 +522,13 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
             if modflav == "b": modflavnum = 1
             elif modflav == "c": modflavnum = 0
             else: raise ValueError
-            print "Using modded XSec for %s flavour of %s process."%(modflav,modprocName)
+            #print "Using modded XSec for %s flavour of %s process."%(modflav,modprocName)
+            print("Using modded XSec for %s flavour of %s process."%(modflav,modprocName))
         else:
             procName = useXSecUnc.split('_')[1]
             direction = useXSecUnc.split('_')[2]
-            print "Using XSec uncertainty:", useXSecUnc
+            #print "Using XSec uncertainty:", useXSecUnc
+            print("Using XSec uncertainty:", useXSecUnc)
             modprocName = ""
     else:
         procName = ""
@@ -524,11 +538,13 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
     if len([i for i in samplesInDir if i.startswith("W1JetsToLNu_")]) > 0:
         global splitWbynJets
         splitWbynJets = True
-        print "Will split WJets samples by jet multiplicity."
+        #print "Will split WJets samples by jet multiplicity."
+        print("Will split WJets samples by jet multiplicity.")
     if len([i for i in samplesInDir if i.startswith("DYJetsToLL_M-50_HT-")]) > 0:
         global splitDYbyHT
         splitDYbyHT = True
-        print "Will split DYJets samples by HT bins."
+        #print "Will split DYJets samples by HT bins."
+        print("Will split DYJets samples by HT bins.")
 
     colours=[]
     colourNames = [ROOT.kCyan,ROOT.kYellow,ROOT.kMagenta,ROOT.kBlue,ROOT.kGreen,ROOT.kRed,ROOT.kGray]
@@ -602,7 +618,8 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
     c.SetCanvasSize(1200,1200)
 #    c.SetWindowSize(1200,1200)
 
-    print "Using era: %d, Lumi: %d"%(era,lumi)
+    #print "Using era: %d, Lumi: %d"%(era,lumi)
+    print("Using era: %d, Lumi: %d"%(era,lumi))
 
     # ======================= Selection info =========================
     if nminus1:
@@ -610,13 +627,17 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
             selList = selections.split("&&")
             updatedSel = [sel.strip() for sel in selList if not brName in sel]
             selections = ' && '.join(updatedSel)            
-            print "Plotting (n-1) cuts plot..."
+            #print "Plotting (n-1) cuts plot..."
+            print("Plotting (n-1) cuts plot...")
         else:
-            print "Failed to plot (n-1) cuts plot, plotting all-cuts plot instead..."
+            #print "Failed to plot (n-1) cuts plot, plotting all-cuts plot instead..."
+            print("Failed to plot (n-1) cuts plot, plotting all-cuts plot instead...")
     if len(selections) > 0:
-        print "Selections:"
+        #print "Selections:"
+        print("Selections:")
         for isel in selections.split('&&'):            
-            print '  --> '+isel.strip()
+            #print '  --> '+isel.strip()
+            print('  --> '+isel.strip())
         
     # ----------------------------------------------------------------
 
@@ -658,13 +679,15 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
         histsToFlMap = []
         for dir in AllSamplePaths:
             flName = dir.split('/')[-1]
-            print "Starting with "+dir
+            #print "Starting with "+dir
+            print("Starting with "+dir)
             histo, nTot = makeHisto(dir,"Events",brName,brLabel,nbins,start,end,weightName=MCWeightName,divideByFlav=True,selections=selections,brName2D=brName2D,nbins2=nbins2,start2=start2,end2=end2,varBin1=array('d',varBin1),varBin2=array('d',varBin2),getSFUnc=getSFUnc)
             for idx in range(4):
                 allHists.append(histo[idx].Clone())
                 integrals.append(nTot)
                 histsToFlMap.append(flName)
-            print "Done."
+            #print "Done."
+            print("Done.")
             if makeBinWtTxt: binWtTxtFileDict[flName] = binWtDict
         
         # ROOT.gInterpreter.ProcessLine("TFile *nf = new TFile(\"text.root\",\"RECREATE\"); nf->cd(); SFUnc->Write(); nf->Close()")
@@ -685,7 +708,8 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
             iHist.Scale(normF)
             if makeBinWtTxt: normFactByFl[histsToFlMap[ind]] = normF
                 
-            print histsToFlMap[ind], sampleNames[ind],": Total MC:", integrals[ind], "; Selected Events:", nSelEvents, "; Norm Factor:", normF, "; Events in stack:", iHist.Integral()
+            #print histsToFlMap[ind], sampleNames[ind],": Total MC:", integrals[ind], "; Selected Events:", nSelEvents, "; Norm Factor:", normF, "; Events in stack:", iHist.Integral()
+            print(histsToFlMap[ind], sampleNames[ind],": Total MC:", integrals[ind], "; Selected Events:", nSelEvents, "; Norm Factor:", normF, "; Events in stack:", iHist.Integral())
         # -------------------------------------------------------------------
 
         # ===================== Evaluate MC stat errors ======================
@@ -752,7 +776,8 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
     for ind, iName in enumerate(sampleNamesSet):
         finalHists[iName].SetFillColor(colours[ind])
         legend.AddEntry(finalHists[iName],iName,"f")
-        print iName,":", finalHists[iName].Integral()
+        #print iName,":", finalHists[iName].Integral()
+        print(iName,":", finalHists[iName].Integral())
 
     # ================= Make stack histogram ===================
     myStack = ROOT.THStack("myStack","")
@@ -760,7 +785,8 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
     sampleNamesSet.reverse()
     for iName in sampleNamesSet:
         myStack.Add(finalHists[iName],"hist")
-    print "Created stack histogram."
+    #print "Created stack histogram."
+    print("Created stack histogram.")
     # ----------------------------------------------------------
 
     # ===================== Make data histo ==========================
@@ -768,12 +794,14 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
         histoD, nTot = makeHisto(datadir,"Events",brName,brLabel,nbins,start,end,weightName=DataWeightName,selections=selections,brName2D=brName2D,nbins2=nbins2,start2=start2,end2=end2,varBin1=array('d',varBin1),varBin2=array('d',varBin2))
 
         if normTotalMC:
-            print "Will normalize total MC to data, with factor:"
+            #print "Will normalize total MC to data, with factor:"
+            print("Will normalize total MC to data, with factor:")
             MCCount = myStack.GetStack().Last().Integral()
             DataCount = histoD.Integral()
             MCNormFactor = DataCount/MCCount
             # find out if normalization works
-            print MCNormFactor
+            #print MCNormFactor
+            print(MCNormFactor)
 
             myStack.Delete()
             myStack = ROOT.THStack("myStack","")
@@ -859,9 +887,11 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
     histoMC = myStack.GetStack().Last()
     histoBkg=myStack.GetStack().Before(histoMC)
     if dataset=="":
-        print "Total MC:", histoMC.Integral()
+        #print "Total MC:", histoMC.Integral()
+        print("Total MC:", histoMC.Integral())
     else:
-        print "Total MC:", histoMC.Integral(), ", Data:",histoD.Integral()
+        #print "Total MC:", histoMC.Integral(), ", Data:",histoD.Integral()
+        print("Total MC:", histoMC.Integral(), ", Data:",histoD.Integral())
 
     if not dataset=="":
         histoD.Draw("same p e")
@@ -1004,13 +1034,15 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
                         normfactor = normFactors[histsToFlMap.index(flName)]
                         wtsum += normfactor*SFBinCounts[ib][thiskey][flName]
                     uncsum2 += (wtsum*statUnc)**2
-                    if ib == 18: print wtsum,statUnc
+                    #if ib == 18: print wtsum,statUnc
+                    if ib == 18: print(wtsum,statUnc)
                 SFUnc.SetBinContent(ib,uncsum2**0.5)
             SFUnc.SetNameTitle("SFUnc",getbrText(brName))
             SFUnc.Write()
 
         outROOT.Close()
-        print rootName, "created."
+        #print rootName, "created."
+        print(rootName, "created.")
     
     if makeBinWtTxt:
         binTxtName = outDir+saveName+".txt"
@@ -1021,7 +1053,8 @@ def plotStack(brName,brLabel,nbins,start,end,selections="",cuts=[], dataset="", 
             binFile.write("binWtDict = ")
             binFile.write(str(json.dumps(binWtTxtFileDict, indent=4, sort_keys=True)))
             
-        print "Written %s."%binTxtName
+        #print "Written %s."%binTxtName
+        print("Written %s."%binTxtName)
 
     if not doCombine:
         if dataset=="":
