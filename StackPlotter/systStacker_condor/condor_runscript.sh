@@ -1,4 +1,4 @@
-	OUTPUTDIR=/nfs/dust/cms/user/summer/ctag_condor/Plots_210711_200_customNominal/
+	OUTPUTDIR=/nfs/dust/cms/user/summer/ctag_condor/Plots_210711_200_customNominalFGSM/
 	OUTPUTNAME=output_2017_PFNano
 
 	CONDOR_CLUSTER_ID=$1
@@ -27,7 +27,6 @@
 
         echo "setting up the environment"
         cd /cvmfs/cms.cern.ch/slc7_amd64_gcc820/cms/cmssw/CMSSW_11_1_0_p3_ROOT618/src/
-        #source /cvmfs/cms.cern.ch/cmsset_default.sh
         source /afs/desy.de/user/s/spmondal/public/cmsset_default.sh
         eval `scramv1 runtime -sh`
         echo "echo PATH:"
