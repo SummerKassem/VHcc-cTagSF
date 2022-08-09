@@ -24,7 +24,7 @@ default = 0.001
 defaults_per_variable = minima - default
 threshold = 0.001
 
-no_features = 67
+no_features = 67    
 included_features = np.arange(0,no_features)
 
 def cleandataset(f, isMC):
@@ -118,6 +118,10 @@ def preprocess(rootfile, isMC):
     
     dataset_input_target = cleandataset(uproot.open(rootfile), isMC)
     #print(f"Shape of dataset returned from cleaning:{np.shape(dataset_input_target)}")
+
+    # use the global variables do not declare local new ones
+    global no_features
+    global included_features
     
     # if model should be ablated load correct ranking based on weighingMethod 
     if "ablated" in weighingMethod:
@@ -140,33 +144,25 @@ def preprocess(rootfile, isMC):
         excluded_features = np.array(df.index[0:int(no_excluded_features)].values)
         included_features = np.array(df.index[int(no_excluded_features):].values)
 
-        #print(df.keys)
-        #print(excluded_features)
-        #print(included_features)
-        #print(len(excluded_features)+len(included_features))
-    
-        no_features = len(included_features)
-        print(f"#1After feature ablation there are {no_features} remaining")
+        no_features = len(included_features) if len(included_features) < no_features else no_features
 
-    print(f"#2After feature ablation there are {no_features} remaining")
-    sys.exit()
+    inputs          = torch.Tensor(dataset_input_target[:,included_features])
+    scaled_defaults = np.zeros_like(defaults_per_variable[included_features])
+    scalers         = [torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt') for i in included_features]
 
-    inputs = torch.Tensor(dataset_input_target[:,0:67])
-    scaled_defaults = np.zeros_like(defaults_per_variable[0:67])
-    
     # targets only make sense for MC, but nothing 'breaks' when calling it on Data (the last column is different though)
     targets = torch.Tensor(dataset_input_target[:,-1]).long()
 
     if (isMC & isInteractive):
         print(f"Possible Targets are: {torch.unique(targets)}") 
 
-    #marker start doing ablation here 
-    for i in range(0,67): # use already calculated scalers (same for all files),
-        # for the calculation, only train samples and only non-defaults were used
+    for i in range(len(included_features)): 
+        # use already calculated scalers (same for all files),
+        # for the calculation, only train samples that are non-defaults were used
         #scaler = StandardScaler().fit(inputs[:,i][inputs[:,i]!=defaults_per_variable[i]].reshape(-1,1))
-        scaler              = torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt')
-        inputs[:,i]         = torch.Tensor(scaler.transform(inputs[:,i].reshape(-1,1)).reshape(1,-1))
-        scaled_defaults[i]  = scaler.transform(defaults_per_variable[i].reshape(-1,1)).reshape(1,-1)
+        
+        inputs[:,i]         = torch.Tensor(scalers[i].transform(inputs[:,i].reshape(-1,1)).reshape(1,-1))
+        scaled_defaults[i]  = scalers[i].transform(defaults_per_variable[i].reshape(-1,1)).reshape(1,-1)
 
     scaled_defaults = torch.Tensor(scaled_defaults)
 
@@ -499,7 +495,7 @@ def calcCvsL_legacy(predictions):  # P(c)/(P(udsg)+P(c))
     return cvsl
 
 if __name__ == "__main__":
-
+    
     fullName, weighingMethod, condoroutdir, isInteractive = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]=='yes'
 
     if isInteractive:
@@ -508,7 +504,7 @@ if __name__ == "__main__":
     parentDir = ""
     era = 2016
 
-    print("\n Will open file %s \n"%(fullName))
+    print("\nWill open file %s \n"%(fullName))
 
     parentDirList = ["/106X_v2_17/","/106X_v2_17rsb2/","/106X_v2_17rsb3/"]
 
