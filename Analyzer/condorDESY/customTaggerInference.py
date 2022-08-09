@@ -3,6 +3,7 @@ import os
 import uproot as uproot
 import numpy as np
 import awkward as ak
+import pandas as pd
 
 #import matplotlib.pyplot as plt
 #import coffea.hist as hist
@@ -14,7 +15,8 @@ import torch.nn as nn
 
 from focal_loss import FocalLoss
 
-print("Torch version =",torch.__version__)
+import warnings
+warnings.filterwarnings("ignore", message="torch.distributed.reduce_op is deprecated, please use torch.distributed.ReduceOp instead")
 
 minima = np.load('/nfs/dust/cms/user/summer/additional_files/minima.npy')
 default = 0.001
@@ -22,8 +24,10 @@ default = 0.001
 defaults_per_variable = minima - default
 threshold = 0.001
 
+no_features = 67
+included_features = np.arange(0,no_features)
+
 def cleandataset(f, isMC):
-    print('Doing cleaning, isMC = ',isMC)
     
     feature_names = [k for k in f['Events'].keys() if  (('Jet_eta' == k) or ('Jet_pt' == k) or ('Jet_DeepCSV' in k))]
 
@@ -65,7 +69,7 @@ def cleandataset(f, isMC):
     #print(np.unique(datavectors[:,len(feature_names)])) # if it is MC will contain jet-flavour otherwise 0
     #print(np.shape(datavectors))
 
-    for j in range(67):
+    for j in range(no_features):
         datavectors[:, j][datavectors[:, j] == np.nan]  = defaults_per_variable[j]
         datavectors[:, j][datavectors[:, j] <= -np.inf] = defaults_per_variable[j]
         datavectors[:, j][datavectors[:, j] >= np.inf]  = defaults_per_variable[j]
@@ -99,7 +103,7 @@ def cleandataset(f, isMC):
     for AboveCharm_vars in [41,48,49,56]:
         alldata[:,AboveCharm_vars][alldata[:,AboveCharm_vars]==-1] = defaults_per_variable[AboveCharm_vars] 
     
-    datacls = [i for i in range(0,67)]
+    datacls = [i for i in range(0,no_features)]
 
     if isMC == True:
         datacls.append(73)
@@ -113,17 +117,50 @@ def preprocess(rootfile, isMC):
     print('Doing starting clean/prep, isMC: ',isMC)
     
     dataset_input_target = cleandataset(uproot.open(rootfile), isMC)
-    #print(len(dataset_input_target))
-    #print(np.unique(dataset_input_target[:,-1]))
     #print(f"Shape of dataset returned from cleaning:{np.shape(dataset_input_target)}")
     
+    # if model should be ablated load correct ranking based on weighingMethod 
+    if "ablated" in weighingMethod:
+        
+        ablationSpecs   = weighingMethod.split('_')
+        topBottom       = ablationSpecs[1]
+        no_excluded_features    = ablationSpecs[2]
+        rawDistorted    = 'raw' if 'raw' in ablationSpecs[3] else 'distorted'
+        ablatedModel    = 'Nominal' if 'Nominal' in ablationSpecs[3] else 'FGSM'
+        epsilon         = '0.0' if ablationSpecs[3] == 'rawNominal' else '0.01'
+
+        print(f"\nModel should be {ablationSpecs[0]}, by removing the {topBottom} {no_excluded_features} from the {ablatedModel} model, ranking was evaluated using {rawDistorted} inputs\n")
+        
+        # load ranking into a dataframe df, the df will have an index and two columns: feature_name & ranking
+        # df.index is the original index of the feature that matches dataset_input_target 
+        df = pd.read_pickle(f'/nfs/dust/cms/user/summer/additional_files/feature_ranking/IG_DefaultBase/{rawDistorted}{ablatedModel}/combined-ranking_1000000-Jets_mean_TT_File_{rawDistorted}{ablatedModel}_Mode_{epsilon}_PARAM.pkl')
+        # sort values descendingly/ascendingly depending on whether ablation will be done by removing the top/bottom features
+        df = df.sort_values('ranking', ascending = False if topBottom=='top' else True)
+        # now df.index contains the sorted indicies of the feature based on their ranking
+        excluded_features = np.array(df.index[0:int(no_excluded_features)].values)
+        included_features = np.array(df.index[int(no_excluded_features):].values)
+
+        #print(df.keys)
+        #print(excluded_features)
+        #print(included_features)
+        #print(len(excluded_features)+len(included_features))
+    
+        no_features = len(included_features)
+        print(f"#1After feature ablation there are {no_features} remaining")
+
+    print(f"#2After feature ablation there are {no_features} remaining")
+    sys.exit()
+
     inputs = torch.Tensor(dataset_input_target[:,0:67])
     scaled_defaults = np.zeros_like(defaults_per_variable[0:67])
     
     # targets only make sense for MC, but nothing 'breaks' when calling it on Data (the last column is different though)
     targets = torch.Tensor(dataset_input_target[:,-1]).long()
-    #print(torch.unique(targets))        
-    
+
+    if (isMC & isInteractive):
+        print(f"Possible Targets are: {torch.unique(targets)}") 
+
+    #marker start doing ablation here 
     for i in range(0,67): # use already calculated scalers (same for all files),
         # for the calculation, only train samples and only non-defaults were used
         #scaler = StandardScaler().fit(inputs[:,i][inputs[:,i]!=defaults_per_variable[i]].reshape(-1,1))
@@ -462,63 +499,71 @@ def calcCvsL_legacy(predictions):  # P(c)/(P(udsg)+P(c))
     return cvsl
 
 if __name__ == "__main__":
-    fullName, weightingMethod, condoroutdir = sys.argv[1], sys.argv[2], sys.argv[3]
-    
+
+    fullName, weighingMethod, condoroutdir, isInteractive = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]=='yes'
+
+    if isInteractive:
+        print(f"\nScript is being run interactively")
+
     parentDir = ""
     era = 2016
-    
-    print("Will open file %s"%(fullName))
+
+    print("\n Will open file %s \n"%(fullName))
 
     parentDirList = ["/106X_v2_17/","/106X_v2_17rsb2/","/106X_v2_17rsb3/"]
 
     for iParent in parentDirList:
         if iParent in fullName: 
             parentDir = iParent
-    
+
     if parentDir == "": fullName.split('/')[8]+"/"
 
     # this is needed because both 2017 and 2018 appear in the new file names
     if "2017" in fullName: 
         era = 2017
     if "2018" and not "2017" in fullName: 
-        era = 2018   
-    
+        era = 2018 
+
     sampName=   fullName.split(parentDir)[1].split('/')[0]
     channel =   sampName
-    # for PostProc files
-    #sampNo =   fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
-    # for PFNano files
-    sampNo  =   fullName.split(parentDir)[1].split('/')[1]
+
+    if "PFNano" in fullName:
+        sampNo  =   fullName.split(parentDir)[1].split('/')[1]
+    else: # for PostProc files
+        sampNo =   fullName.split(parentDir)[1].split('/')[1].split('_')[-1]
+
     dirNo   =   fullName.split(parentDir)[1].split('/')[3][-1]
     flNo    =   fullName.split(parentDir)[1].split('/')[-1].rstrip('.root').split('_')[-1]
     outNo   =   "%s_%s_%s"%(sampNo,dirNo,flNo)
-    
+
     if "_" in channel: 
         channel=channel.split("_")[0]
 
-    # channel="Generic"
     if not 'Single' in channel and not 'Double' in channel and not 'EGamma' in channel:
         isMC = True
     else:
         isMC = False
-    print("Using channel =",channel, "; isMC:", isMC, "; era: %d"%era)
-    
+
+    print("Using channel =",channel, "; isMC:", isMC, "; era: %d"%era, "; outNo:", outNo)
+
     global n_jets
-    
-    #inputs, targets, scalers = preprocess(fullName, isMC)                  # use this if running script interactively 
-    inputs, targets, scaled_defaults = preprocess('infile.root', isMC)      # use this if running script from condor_runscript_xxx.sh
-    
+
+    if isInteractive: 
+        inputs, targets, scalers = preprocess(fullName, isMC)                  
+    else:
+        inputs, targets, scaled_defaults = preprocess('infile.root', isMC)
+
     n_jets = len(targets)
-    
+
     # to check multiple epochs of a given weighting method at once (using always 3 epochs should make sense, as previous tests were done on raw/noise/FGSM = 3 different sets)
-    if weightingMethod.startswith('_multi_'):
+    if weighingMethod.startswith('_multi_'):
         letters = ['A','B','C']  # using the same three letters all the time means that the Analyzer code does not need to be updated for every possible epoch
-        if 'basic' in weightingMethod:
+        if 'basic' in weighingMethod:
             # basic training on raw inputs only
-            wmethods = ['basic_'+e for e in (weightingMethod.split('_basic_')[-1]).split(',')]
+            wmethods = ['basic_'+e for e in (weighingMethod.split('_basic_')[-1]).split(',')]
         else:
             # adversarial training
-            wmethods = ['adv_tr_eps0.01_'+e for e in (weightingMethod.split('_adv_tr_eps0.01_')[-1]).split(',')]
+            wmethods = ['adv_tr_eps0.01_'+e for e in (weighingMethod.split('_adv_tr_eps0.01_')[-1]).split(',')]
 
         print('Will run with these weighting methods & epochs:', wmethods)
         
@@ -577,7 +622,7 @@ if __name__ == "__main__":
     # just one weighting method at a given epoch, but with Noise or FGSM attack applied to MC
     else:
 
-        wm = weightingMethod
+        wm = weighingMethod
         
         outputPredsdir = "outPreds_%s.npy"%(outNo)
         outputCvsBdir = "outCvsB_%s.npy"%(outNo)
@@ -627,12 +672,6 @@ if __name__ == "__main__":
         np.save(outputCvsLdir, cvl)
         del cvl
         gc.collect()
-
-        #print("predictions before cutting over/underflow")
-        #print(min(predictions[:,0]), max(predictions[:,0]))
-        #print(min(predictions[:,1]), max(predictions[:,1]))
-        #print(min(predictions[:,2]), max(predictions[:,2]))
-        #print(min(predictions[:,3]), max(predictions[:,3]))
 
         for i in range(4):
             predictions[:,i][predictions[:,i] > 0.99999] = 0.99999  
@@ -763,7 +802,7 @@ sys.exit()
 index = 21
 threshold = 0
 
-predictions = predict(inputs, weightingMethod)
+predictions = predict(inputs, weighingMethod)
 raw_sample      = inputs[:,index].numpy()
 noise_sample    = apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults)[:,index].numpy()
 fgsm_sample     = fgsm_attack(epsilon=1e-2, sample=inputs, targets=targets, reduced=True, scaled_defaults_per_variable = scaled_defaults)[:,index].numpy()
@@ -789,6 +828,4 @@ plt.title(f"Threshold is {threshold}")
 plt.show()
                     
 sys.exit()
-
-        
 '''
