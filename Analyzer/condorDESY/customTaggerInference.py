@@ -133,7 +133,7 @@ def preprocess(rootfile, isMC):
         ablatedModel    = 'Nominal' if 'Nominal' in ablationSpecs[3] else 'FGSM'
         epsilon         = '0.0' if ablationSpecs[3] == 'rawNominal' else '0.01'
 
-        print(f"\nModel should be {ablationSpecs[0]}, by removing the {topBottom} {no_excluded_features} from the {ablatedModel} model, ranking was evaluated using {rawDistorted} inputs\n")
+        print(f"\nModel should be {ablationSpecs[0]}, by removing the {topBottom} {no_excluded_features} ranking features as evaluated using {rawDistorted} inputs on {ablatedModel} model\n")
         
         # load ranking into a dataframe df, the df will have an index and two columns: feature_name & ranking
         # df.index is the original index of the feature that matches dataset_input_target 
@@ -238,11 +238,13 @@ def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scaled_defau
 
 def predict(inputs, method):
     
+    global model
+    global criterion
+
     with torch.no_grad():
         device = torch.device("cpu")
-        global model
-        global criterion
-        model = nn.Sequential(nn.Linear(67, 100),
+        
+        model = nn.Sequential(nn.Linear(no_features, 100),
                           nn.ReLU(),
                           nn.Dropout(0.1),
                           nn.Linear(100, 100),
@@ -258,7 +260,7 @@ def predict(inputs, method):
                           nn.ReLU(),
                           nn.Linear(100, 4),
                           nn.Softmax(dim=1))
-
+        
         if method == '_new':
             #allweights = compute_class_weight(
             #       'balanced',
@@ -398,14 +400,26 @@ def predict(inputs, method):
             modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/adv_tr/model_{epoch}_epochs_v10_GPU_weighted_ptetaflavloss_focalloss_gamma25.0_adv_tr_eps0.01_278_datasets_with_default_0.001_-1.pt'
             
         elif method.startswith('basic'):
+            print("from here#1")
             epoch = method.split('basic_')[-1]
             # for focal loss: parameters
             alpha = None
             gamma = 25.0
             criterion = FocalLoss(alpha, gamma, reduction='none')
-            modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/basic_tr/model_{epoch}_epochs_v10_GPU_weighted_ptetaflavloss_focalloss_gamma25.0_278_datasets_with_default_0.001_-1.pt'
-            
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/normal_tr_278_-1/model_200_epochs_normal_tr_278_-1.pt'
 
+        elif method.startwith('ablated'):
+            print("from here#2")
+            ablationSpecs   = method.split('_')
+            topBottom       = ablationSpecs[1]
+            no_excluded_features    = ablationSpecs[2]
+            origModel    = 'normal' if 'Nominal' in ablationSpecs[3] else 'adversarial'
+            epsilon         = '' if 'Nominal' in ablationSpecs[3] else 'eps0.01_'
+
+            criterion = FocalLoss(alpha = None, gamma = 25.0, reduction='none')
+
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/ablation_IG_DefaultBase_{topBottom}_{no_excluded_features}_{ablationSpecs[3]}_TT_{origModel}_tr_{epsilon}278_-1/'
+            
         #
         #
         #
@@ -419,6 +433,11 @@ def predict(inputs, method):
         
         checkpoint = torch.load(modelPath, map_location=torch.device(device))
         model.load_state_dict(checkpoint["model_state_dict"])
+
+        # marker
+        # test for basic, adversarial then ablated normal and adversarial
+        print(f"model loaded successfully")
+        sys.exit()
 
         model.to(device)
 
@@ -545,7 +564,7 @@ if __name__ == "__main__":
     global n_jets
 
     if isInteractive: 
-        inputs, targets, scalers = preprocess(fullName, isMC)                  
+        inputs, targets, scaled_defaults = preprocess(fullName, isMC)                  
     else:
         inputs, targets, scaled_defaults = preprocess('infile.root', isMC)
 
@@ -638,10 +657,10 @@ if __name__ == "__main__":
         fgsm_outputBvsCdir = "fgsm_outBvsC_%s.npy"%(outNo)
         fgsm_outputBvsLdir = "fgsm_outBvsL_%s.npy"%(outNo)
 
-        print("Saving into %s/%s"%(condoroutdir,sampName))
+        #print("Saving into %s/%s"%(condoroutdir,sampName))
         
         predictions = predict(inputs, wm)
-        #print(f"shape of predictions:{np.shape(predictions)}")
+        print(f"shape of predictions:{np.shape(predictions)}")
         
         bvl = calcBvsL(predictions)
         
