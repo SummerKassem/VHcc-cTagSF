@@ -1,29 +1,19 @@
-	OUTPUTDIR=/nfs/dust/cms/user/summer/ctag_condor/Plots_210711_200_customNominalFGSM/
-	OUTPUTNAME=output_2017_PFNano
+	model=$3
+  mode=$4
+
+  OUTPUTDIR=/nfs/dust/cms/user/summer/ctag_condor/Plots_$model"_"$mode/
+  echo $OUTPUTDIR
+
+	OUTPUTNAME=output_PFNano
 
 	CONDOR_CLUSTER_ID=$1
 	CONDOR_PROCESS_ID=$2
 
         export PATH=/afs/desy.de/common/passwd:/usr/local/bin:/bin:/usr/bin:/usr/local/sbin:/usr/sbin:/sbin:/cvmfs/grid.cern.ch/emi3ui-latest/bin:/cvmfs/grid.cern.ch/emi3ui-latest/sbin:/cvmfs/grid.cern.ch/emi3ui-latest/usr/bin:/cvmfs/grid.cern.ch/emi3ui-latest/usr/sbin:$PATH
-        echo "echo PATH:"
-        echo $PATH
-        echo "arguments: " $1 $2 $3
-        echo "username and group"
-        id -n -u
-        id -n -g
-        echo "tokens"
-        tokens
-        echo "klist -f"
-        klist -f
-        echo "try aklog"
-        aklog
-        echo "and again: tokens"
-        tokens
-        echo "as well as: klist -f"
-        klist -f
+        
         echo "creating tempdir and copy"
         tmp_dir=$(mktemp -d)
-        cp -r ../Stacker.py cmdList.txt ../samplesDict.py $tmp_dir
+        cp -r ../Stacker.py cmdList_$model"_"$mode.txt ../samplesDict.py $tmp_dir
 
         echo "setting up the environment"
         cd /cvmfs/cms.cern.ch/slc7_amd64_gcc820/cms/cmssw/CMSSW_11_1_0_p3_ROOT618/src/
@@ -39,7 +29,7 @@
         ls
 	
     	echo "running python script"
-        python -c $'import Stacker; f=open("cmdList.txt","r"); ln=f.readlines(); thisline=ln['$2$'];\nfor cmd in thisline.split("NEWLINE"): exec(cmd)'
+        python -c $'import Stacker; f=open("cmdList_'$model$'_'$mode$'.txt","r"); ln=f.readlines(); thisline=ln['$2$'];\nfor cmd in thisline.split("NEWLINE"): exec(cmd)'
        	rc=$?
         if [[ $rc != 0 ]]
         then
