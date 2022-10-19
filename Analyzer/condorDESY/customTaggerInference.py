@@ -26,6 +26,7 @@ threshold = 0.001
 
 no_features = 67    
 included_features = np.arange(0,no_features)
+integervars = [59,63,64,65,66]
 
 def cleandataset(f, isMC):
     
@@ -122,36 +123,60 @@ def preprocess(rootfile, isMC):
     # use the global variables do not declare local new ones
     global no_features
     global included_features
-    
+    global integervars
+    global defaults_per_variable
+
     # if model should be ablated load correct ranking based on weighingMethod 
     if "ablated" in weighingMethod:
         
         ablationSpecs   = weighingMethod.split('_')
-        topBottom       = ablationSpecs[1]
-        no_excluded_features    = ablationSpecs[2]
-        rawDistorted    = 'raw' if 'raw' in ablationSpecs[3] else 'distorted'
-        ablatedModel    = 'Nominal' if 'Nominal' in ablationSpecs[3] else 'FGSM'
-        epsilon         = '0.0' if ablationSpecs[3] == 'rawNominal' else '0.01'
-
-        print(f"\nModel should be {ablationSpecs[0]}, by removing the {topBottom} {no_excluded_features} ranking features as evaluated using {rawDistorted} inputs on {ablatedModel} model\n")
+        print(ablationSpecs)
         
+        topBottom               = ablationSpecs[1]
+        no_excluded_features    = ablationSpecs[2]
+        rawDistorted            = 'raw'     if 'raw' in ablationSpecs[3] else 'distorted'
+        ablatedModel            = 'Nominal' if 'Nominal' in ablationSpecs[3] else 'Adv'
+        epsilon                 = '0.0'     if ablationSpecs[3] == 'rawNominal' else '0.01'
+
+        print(f"\nModel should be {ablationSpecs[0]}, by removing the {topBottom} {no_excluded_features} ranking features, which were evaluated using IG, {rawDistorted} inputs on {ablatedModel} model\n")
+                
         # load ranking into a dataframe df, the df will have an index and two columns: feature_name & ranking
         # df.index is the original index of the feature that matches dataset_input_target 
-        df = pd.read_pickle(f'/nfs/dust/cms/user/summer/additional_files/feature_ranking/IG_DefaultBase/{rawDistorted}{ablatedModel}/combined-ranking_1000000-Jets_mean_TT_File_{rawDistorted}{ablatedModel}_Mode_{epsilon}_PARAM.pkl')
+        df = pd.read_pickle(f'/nfs/dust/cms/user/summer/additional_files/feature_ranking/IG_DefaultBase/{ablationSpecs[3]}/combined-ranking_1000000-Jets_mean_TT_File_{ablationSpecs[3]}_Mode_{epsilon}_PARAM.pkl')
         # sort values descendingly/ascendingly depending on whether ablation will be done by removing the top/bottom features
         df = df.sort_values('ranking', ascending = False if topBottom=='top' else True)
+
         # now df.index contains the sorted indicies of the feature based on their ranking
         excluded_features = np.array(df.index[0:int(no_excluded_features)].values)
-        included_features = np.array(df.index[int(no_excluded_features):].values)
+        # list of included features must be sorted, so that commands like i = i[:,included_features] work properly
+        included_features = np.sort(np.array(df.index[int(no_excluded_features):].values))
+        
+        # adjust number of features and integer variable indices which are used by FGSM and noise attack
+        if len(included_features) < no_features:
+            no_features = len(included_features) 
+            
+            # keep only integer variables that have not been excluded by ablation
+            integervars = [i for i in integervars if i in included_features]
+            # for every variable if there were features excluded before it then its index should be shifted by their number
+            
+            integervars = [i - len([m for m in excluded_features if m < i]) for i in integervars]
 
-        no_features = len(included_features) if len(included_features) < no_features else no_features
+    #targets_before          = torch.Tensor(dataset_input_target[:,-1]).long()
+    inputs                  = torch.Tensor(dataset_input_target[:,included_features])
 
-    inputs          = torch.Tensor(dataset_input_target[:,included_features])
-    scaled_defaults = np.zeros_like(defaults_per_variable[included_features])
-    scalers         = [torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt') for i in included_features]
+    defaults_per_variable   = defaults_per_variable[included_features]
+    scaled_defaults         = defaults_per_variable
+
+    scalers                 = [torch.load(f'/nfs/dust/cms/user/summer/additional_files/scalers/scaler_{i}_with_default_{default}.pt') for i in included_features]
+
+    #print(f"Shapes: {inputs.size()}, {len(defaults_per_variable)}, {len(scaled_defaults)}, {len(scalers)}")
 
     # targets only make sense for MC, but nothing 'breaks' when calling it on Data (the last column is different though)
     targets = torch.Tensor(dataset_input_target[:,-1]).long()
+
+    # number should match inputs.size()[0]
+    #print(f"comparison check:{torch.sum(torch.eq(targets_before, targets), dim=0)}")
+    #sys.exit()
 
     if (isMC & isInteractive):
         print(f"Possible Targets are: {torch.unique(targets)}") 
@@ -169,19 +194,19 @@ def preprocess(rootfile, isMC):
     return inputs, targets, scaled_defaults
 
 def apply_noise(sample, magn=1e-2,offset=[0], scaled_defaults_per_variable=[]):
+    
     with torch.no_grad():
         device = torch.device("cpu")
         
         size_of_sample = len(sample)
-        noise = torch.Tensor(np.random.normal(offset,magn,(size_of_sample,67))).to(device)
+        
+        noise = torch.Tensor(np.random.normal(offset,magn,(size_of_sample,no_features))).to(device)
         xadv = sample + noise
         
-        integervars = [59,63,64,65,66]
-
         for variable in integervars:
             xadv[:,variable] = sample[:,variable]
-
-        for i in range(67):
+            
+        for i in range(no_features):
             defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) <= threshold   # creates an array of true/false which if sample == scaled_default then True otherwise False
             
             if torch.sum(defaults) != 0: 
@@ -190,7 +215,6 @@ def apply_noise(sample, magn=1e-2,offset=[0], scaled_defaults_per_variable=[]):
         return xadv
 
 def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scaled_defaults_per_variable=[]):
-    device = torch.device("cpu")
     xadv = sample.clone().detach()
     
     # calculate the gradient of the model w.r.t. the *input* tensor:
@@ -205,11 +229,9 @@ def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scaled_defau
     
     # then we just do the forward and backwards pass as usual:
     preds = model(xadv)
-    #print(targets)
-    #print(torch.unique(targets))
-    #print(preds)
+    
     loss = criterion(preds, targets).mean()
-    # maybe add sample weights here as well for the ptetaflavloss weighting method
+    
     model.zero_grad()
     loss.backward()
     
@@ -222,17 +244,17 @@ def fgsm_attack(epsilon=1e-2,sample=None,targets=None,reduced=True, scaled_defau
         
         #remove the impact on selected variables. This is nessecary to avoid problems that occur otherwise in the input shapes.
         if reduced:
-            integervars = [59,63,64,65,66]
+            for i in range(no_features):
 
-            for variable in integervars:
-                xadv[:,variable] = sample[:,variable]
+                if i in integervars:
+                    xadv[:,i] = sample[:,i]
+                else:
+                    #defaults = abs(scalers[i].inverse_transform(sample[:,i].cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
+                    defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) <= threshold   # creates an array of true/false which if sample == scaled_default then True otherwise False
 
-            for i in range(67):
-                #defaults = abs(scalers[i].inverse_transform(sample[:,i].cpu()) - defaults_per_variable[i]) < 0.001   # "floating point error" --> allow some error margin
-                defaults = abs(sample[:,i].cpu() - scaled_defaults_per_variable[i].cpu()) <= threshold   # creates an array of true/false which if sample == scaled_default then True otherwise False
+                    if torch.sum(defaults) != 0:
+                        xadv[:,i][defaults] = sample[:,i][defaults]
 
-                if torch.sum(defaults) != 0:
-                    xadv[:,i][defaults] = sample[:,i][defaults]
 
         return xadv.detach()
 
@@ -240,7 +262,7 @@ def predict(inputs, method):
     
     global model
     global criterion
-
+    
     with torch.no_grad():
         device = torch.device("cpu")
         
@@ -275,13 +297,6 @@ def predict(inputs, method):
             criterion = nn.CrossEntropyLoss()
 
             modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/model_all_TT_350_epochs_v10_GPU_weighted_new_49_datasets_with_default_0.001.pt'
-            #modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/normal_tr_278_-1/model_200_epochs_normal_tr_278_-1.pt'
-
-
-        # ==========================================================================
-        #
-        #                               NEW: may_21
-        #
 
         elif method == '_ptetaflavloss20':
             criterion = nn.CrossEntropyLoss(reduction='none')
@@ -290,17 +305,6 @@ def predict(inputs, method):
         elif method == '_ptetaflavloss278':
             criterion = nn.CrossEntropyLoss(reduction='none')
             modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_1_epochs_v10_GPU_weighted_ptetaflavloss_278_datasets_with_default_0.001_-1.pt'
-
-        #
-        #
-        #
-        # --------------------------------------------------------------------------
-
-
-        # ==========================================================================
-        #
-        #                               NEW: as of June, 16th
-        #
 
         elif method == '_ptetaflavloss_focalloss':
             # for focal loss: parameters
@@ -315,18 +319,6 @@ def predict(inputs, method):
             gamma = 2
             criterion = FocalLoss(alpha, gamma, reduction='none')
             modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_200_epochs_v10_GPU_weighted_flatptetaflavloss_focalloss_278_datasets_with_default_0.001_-1.pt'
-
-        #
-        #
-        #
-        # --------------------------------------------------------------------------
-
-
-
-        # ==========================================================================
-        #
-        #                               NEW: as of June, 25th
-        #
 
         elif method == '_notflat_250_gamma2.0_alphaNone':
             # for focal loss: parameters
@@ -362,16 +354,6 @@ def predict(inputs, method):
             gamma = 25.0
             criterion = FocalLoss(alpha, gamma, reduction='none')
             modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_200_epochs_v10_GPU_weighted_flatptetaflavloss_focalloss_gamma25.0_278_datasets_with_default_0.001_-1.pt'
-
-        #
-        #
-        #
-        # --------------------------------------------------------------------------
-
-        # ==========================================================================
-        #
-        #                               NEW: as of July, 8th
-        #
         
         # only epoch 200
         elif method == '_notflat_200_gamma25.0_alphaNone_adv_tr_eps0.01':
@@ -391,53 +373,50 @@ def predict(inputs, method):
             
         
         # special cases that can handle different epochs (checkpoints)    
-        elif method.startswith('adv'):
-            epoch = method.split('adv_tr_eps0.01_')[-1]
-            # for focal loss: parameters
-            alpha = None
-            gamma = 25.0
-            criterion = FocalLoss(alpha, gamma, reduction='none')
-            modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/adv_tr/model_{epoch}_epochs_v10_GPU_weighted_ptetaflavloss_focalloss_gamma25.0_adv_tr_eps0.01_278_datasets_with_default_0.001_-1.pt'
+        elif method.startswith('adversarial'):
+            if isInteractive:
+                print("loading adversarial model")
+
+            epoch = method.split('adversarial_')[-1]
+            criterion = FocalLoss(alpha = None, gamma = 25.0, reduction='none')
             
-        elif method.startswith('basic'):
-            print("from here#1")
-            epoch = method.split('basic_')[-1]
-            # for focal loss: parameters
-            alpha = None
-            gamma = 25.0
-            criterion = FocalLoss(alpha, gamma, reduction='none')
-            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/normal_tr_278_-1/model_200_epochs_normal_tr_278_-1.pt'
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/new_saved_models/adversarial_tr_eps0.01_278_-1/model_{epoch}_epochs_adversarial_tr_eps0.01_278_-1.pt'
+            
+        elif method.startswith('nominal'):
+            if isInteractive:
+                print("loading nominal model")
 
-        elif method.startwith('ablated'):
-            print("from here#2")
-            ablationSpecs   = method.split('_')
-            topBottom       = ablationSpecs[1]
-            no_excluded_features    = ablationSpecs[2]
-            origModel    = 'normal' if 'Nominal' in ablationSpecs[3] else 'adversarial'
-            epsilon         = '' if 'Nominal' in ablationSpecs[3] else 'eps0.01_'
-
+            epoch = method.split('nominal_')[-1]
             criterion = FocalLoss(alpha = None, gamma = 25.0, reduction='none')
 
-            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/ablation_IG_DefaultBase_{topBottom}_{no_excluded_features}_{ablationSpecs[3]}_TT_{origModel}_tr_{epsilon}278_-1/'
-            
-        #
-        #
-        #
-        # --------------------------------------------------------------------------
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/new_saved_models/normal_tr_278_-1/model_{epoch}_epochs_normal_tr_278_-1.pt'
+        
+        elif method.startswith('ablated'):
+            if isInteractive:
+                print("loading an ablated model")
 
-        # old
+            ablationSpecs           = method.split('_')
+            topBottom               = ablationSpecs[1]
+            no_excluded_features    = ablationSpecs[2]
+            rankingModel            = ablationSpecs[3]
+            epsilon                 = '' if 'Nominal' in ablationSpecs[3] else 'eps0.01_'
+
+            epoch           = ablationSpecs[-1]
+            
+            criterion = FocalLoss(alpha = None, gamma = 25.0, reduction='none')
+            
+            modelPath = f'/nfs/dust/cms/user/summer/trained_models/new_saved_models/ablation_{topBottom}_{no_excluded_features}_{rankingModel}_{epsilon}278_-1/model_{epoch}_epochs_ablation_{topBottom}_{no_excluded_features}_{rankingModel}_{epsilon}278_-1.pt'
+            
         else:
+            print("loading basic model with CROSSENTROPYLOSS!!!!")
             criterion = nn.CrossEntropyLoss()
-            #modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_all_TT_350_epochs_v10_GPU_weighted_as_is_49_datasets_with_default_0.001.pt'
-            modelPath = f'/nfs/dust/cms/user/summer/trained_models/saved_models/normal_tr_278_-1/model_200_epochs_normal_tr_278_-1.pt'
+            modelPath = f'/nfs/dust/cms/user/anstein/pretrained_models/model_all_TT_350_epochs_v10_GPU_weighted_as_is_49_datasets_with_default_0.001.pt'
         
         checkpoint = torch.load(modelPath, map_location=torch.device(device))
         model.load_state_dict(checkpoint["model_state_dict"])
 
-        # marker
-        # test for basic, adversarial then ablated normal and adversarial
-        print(f"model loaded successfully")
-        sys.exit()
+        if isInteractive:
+            print(f"model loaded successfully")
 
         model.to(device)
 
@@ -447,7 +426,7 @@ def predict(inputs, method):
         return model(inputs).detach().numpy()
 
 def calcBvsL(matching_predictions):
-    global n_jets
+    n_jets = len(matching_predictions)
     
     custom_BvL = np.where(((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,3]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,0]+matching_predictions[:,1])/(matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,3]), (-1.0)*np.ones(n_jets))
     
@@ -458,7 +437,7 @@ def calcBvsL(matching_predictions):
     return custom_BvL
 
 def calcBvsC(matching_predictions):
-    global n_jets
+    n_jets = len(matching_predictions)
     
     custom_BvC = np.where(((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,0]+matching_predictions[:,1])/(matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]), (-1.0)*np.ones(n_jets))
     
@@ -469,7 +448,7 @@ def calcBvsC(matching_predictions):
     return custom_BvC
     
 def calcCvsB(matching_predictions):
-    global n_jets
+    n_jets = len(matching_predictions)
     
     custom_CvB = np.where(((matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,2])/(matching_predictions[:,0]+matching_predictions[:,1]+matching_predictions[:,2]), (-1.0)*np.ones(n_jets))
     
@@ -480,7 +459,7 @@ def calcCvsB(matching_predictions):
     return custom_CvB
     
 def calcCvsL(matching_predictions):
-    global n_jets
+    n_jets = len(matching_predictions)
     
     custom_CvL = np.where(((matching_predictions[:,2]+matching_predictions[:,3]) != 0) & (matching_predictions[:,0] >= 0) & (matching_predictions[:,0] <= 1) & (matching_predictions[:,1] >= 0) & (matching_predictions[:,1] <= 1) & (matching_predictions[:,2] >= 0) & (matching_predictions[:,2] <= 1) & (matching_predictions[:,3] >= 0) & (matching_predictions[:,3] <= 1), (matching_predictions[:,2])/(matching_predictions[:,2]+matching_predictions[:,3]), (-1.0)*np.ones(n_jets))
     
@@ -638,7 +617,8 @@ if __name__ == "__main__":
     else:
 
         wm = weighingMethod
-        
+        predictions = predict(inputs, wm)
+
         outputPredsdir = "outPreds_%s.npy"%(outNo)
         outputCvsBdir = "outCvsB_%s.npy"%(outNo)
         outputCvsLdir = "outCvsL_%s.npy"%(outNo)
@@ -656,14 +636,10 @@ if __name__ == "__main__":
         fgsm_outputCvsLdir = "fgsm_outCvsL_%s.npy"%(outNo)
         fgsm_outputBvsCdir = "fgsm_outBvsC_%s.npy"%(outNo)
         fgsm_outputBvsLdir = "fgsm_outBvsL_%s.npy"%(outNo)
-
+        
         #print("Saving into %s/%s"%(condoroutdir,sampName))
         
-        predictions = predict(inputs, wm)
-        print(f"shape of predictions:{np.shape(predictions)}")
-        
         bvl = calcBvsL(predictions)
-        
         print('Raw bvl, bvc, cvb, cvl')
         print(min(bvl), max(bvl))
         np.save(outputBvsLdir, bvl)
@@ -697,12 +673,14 @@ if __name__ == "__main__":
             print(min(predictions[:,i]), max(predictions[:,i]))
 
         np.save(outputPredsdir, predictions)
+
         del predictions
         gc.collect()
         
         if isMC == True:
-            noise_sample = apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults)
-            noise_preds = predict(noise_sample, wm)
+            
+            noise_sample    = apply_noise(inputs, magn=1e-2, offset=[0], scaled_defaults_per_variable=scaled_defaults)
+            noise_preds     = predict(noise_sample, wm)
             
             print('Noise bvl, bvc, cvb, cvl')
             noise_bvl = calcBvsL(noise_preds)
@@ -738,12 +716,14 @@ if __name__ == "__main__":
                 print(min(noise_preds[:,i]), max(noise_preds[:,i]))
             
             np.save(noise_outputPredsdir, noise_preds)
+
             del noise_preds
             gc.collect()
+            
 
             fgsm_sample = fgsm_attack(epsilon=1e-2,sample=inputs,targets=targets,reduced=True, scaled_defaults_per_variable = scaled_defaults)
             fgsm_preds = predict(fgsm_sample, wm)
-            
+
             fgsm_bvl = calcBvsL(fgsm_preds)
             print('FGSM bvl, bvc, cvb, cvl')
             print(min(fgsm_bvl), max(fgsm_bvl))
@@ -777,6 +757,7 @@ if __name__ == "__main__":
                 print(min(fgsm_preds[:,i]), max(fgsm_preds[:,i]))
                 
             np.save(fgsm_outputPredsdir, fgsm_preds)
+                
             del fgsm_preds
             gc.collect()
 
